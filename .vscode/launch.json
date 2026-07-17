@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:XMterm-starter}",
+            "name": "Debug XMterm",
+            "target": "XMterm",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug XMterm"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:XMterm-starter}",
+            "name": "Release XMterm",
+            "target": "XMterm",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release XMterm"
+        }
+    ]
+}

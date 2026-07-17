@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+dist/
+*.xcuserstate
+xcuserdata/
+.env
+.env.*
+!.env.example
+
+# XMterm runtime data must never be committed.
+XMtermCache/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
