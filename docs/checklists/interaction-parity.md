@@ -139,6 +139,38 @@ unchecked items are labelled **Partial**, **Deferred**, **Out of scope**,
 - [ ] **Out of scope:** SFTP, Remote File Browser, transfers, external-editor launch,
   and editor synchronization have not been introduced.
 
+## Phase 4A Remote Workspace Foundation
+
+- [x] **Deterministic:** each launched SSH runtime owns exactly one workspace;
+  local runtimes own none; two tabs from one profile are fully independent
+  (`RuntimeSessionTests`, store suites, `SESS-011`, `FILE-WORKSPACE-001`).
+- [x] **Deterministic:** navigation, history, breadcrumbs, refresh, cancellation,
+  stale-result rejection, and bounded cache behavior pass the `XMtermRemote`
+  suites (`FILE-NAV-002`, `FILE-CACHE-001`, `FILE-STATE-001`).
+- [x] **Deterministic:** focused commands route only to the exact selected
+  runtime owner; stale owners and local tabs are rejected; terminal command
+  routing is unchanged (`TerminalWorkspaceCommandTests`).
+- [x] **Deterministic:** copy actions write one plain-text item with no Return
+  and are disabled for lossy raw paths (`RemotePathPasteboardTests`,
+  `FILE-COPY-001`).
+- [x] **Deterministic:** Return is unbound in the read-only listing and rename is
+  unavailable (`RemoteWorkspaceSidebarPolicyTests`, command tests).
+- [x] **Source-reviewed composition:** the sidebar observes only the selected
+  runtime's workspace, renders only cached listings inside the bounded expansion
+  set, creates no per-row task, and never recreates or refocuses the retained
+  terminal view.
+- [ ] **Partial:** packaged simulated-fixture inspection status, including
+  keyboard traversal, VoiceOver, appearance, and Reduce Motion, is recorded row
+  by row in
+  [`remote-workspace-acceptance.md`](remote-workspace-acceptance.md) and
+  `../audits/0006-phase-4a-remote-workspace-evidence.md`; unchecked rows there
+  are not inferred from automated evidence here.
+- [ ] **Blocked (ADR 0007):** real Relay Host listing and production transport
+  acceptance.
+- [ ] **Out of scope:** mutation, transfers, multi/range selection,
+  remote-object clipboard, drag-and-drop, rename, delete, file opening, and
+  editor sync remain Phase 4B or later.
+
 ## Async behavior
 
 - [x] Starting, running, closing, exited, and failed states are explicit.

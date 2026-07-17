@@ -33,3 +33,33 @@
 - Task 8 performance gate: complete (deterministic 1,000-entry fixture; construction
   measured separately; one warm-up plus 11 publications; 20.84 ms p90 observed
   against the 100 ms model/order/cache-publication budget)
+- Interruption recovery (2026-07-17): prior session lost after committing Task 7
+  Step 1 RED tests referencing `RemoteWorkspaceCommandRoute` and
+  `RemoteWorkspaceKeyboardCommand`; recovery confirmed clean tree == origin/main,
+  production build green, and test target failing to compile as the expected RED
+- Task 7: complete (RED confirmed by missing-type compile failures, then
+  `RemoteEntryRow`, `RemoteWorkspaceSidebar` + interaction seam, RootView
+  240...420 sidebar with compact Saved Sessions, Remote command menu, performer/
+  route/focus-owner guards; 18 focused command tests, 80 focused tests across the
+  9 related suites, full verifier 401 tests in 50 suites passing; terminal pane
+  identity untouched — detail column and `TerminalPane` keying unchanged)
+- Cross-task review (Tasks 5–7): complete inline (subagent workflows hit session
+  limits and produced no usable result — recorded honestly, not claimed as a
+  multi-agent pass); two Medium findings fixed (empty-directory context menu;
+  FILE-NAV-002 honest display of a failed collapsed navigation target); no
+  Critical/High; Tasks 5–6 not reimplemented
+- Task 8 closeout: complete (env-gated `RemoteWorkspaceDeveloperFixture` seam +
+  3 tests; coverage XMtermRemote 93.27%/94.25%, logic-only app scope
+  94.49%/82.54%, UI-inclusive 42.29%, whole-source 58.11% — reported separately;
+  security/source scans clean except tracked `default.profraw` hygiene finding;
+  clean-state verify 404 tests in 51 suites OK; warnings-as-errors debug 82.55 s
+  and release 147.59 s clean; packaged simulated manual pass recorded in Audit
+  0006 with explicit not-performed rows)
+- Task 10: complete (ARCHITECTURE/PRODUCT/README/TESTING/SECURITY/PERFORMANCE/
+  PLANS/INTERACTIONS updated; interaction-parity + remote-workspace acceptance
+  checklists walked; Audit 0006 created; verify.sh required-file gate extended
+  with the six Phase 4A documents; post-change verify 404/51 OK)
+- Final status: Phase 4A **PARTIAL** — production structured SFTP transport and
+  real Relay Host listing remain blocked by ADR 0007 (Proposed). Task 9 not
+  started. No Phase 4B/5/6 work exists. Exact recommended next task: Complete
+  Phase 4A production SFTP transport under ADR 0007.

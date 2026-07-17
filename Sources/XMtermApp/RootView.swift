@@ -21,21 +21,13 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List {
-                Section("Sessions") {
-                    Button {
-                        presentSessionManager()
-                    } label: {
-                        Label("Saved Sessions", systemImage: "rectangle.stack")
-                    }
-                    .buttonStyle(.plain)
-
-                    LabeledContent("Profiles", value: profileCountValue)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                savedSessionsSummary
+                Divider()
+                RemoteWorkspaceSidebar(store: workspace)
+                    .frame(maxHeight: .infinity, alignment: .top)
             }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
-            .accessibilityLabel("Saved terminal sessions")
+            .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 420)
         } detail: {
             VStack(spacing: 0) {
                 TerminalWorkspaceHeader(
@@ -124,6 +116,28 @@ struct RootView: View {
             )
             .frame(width: 0, height: 0)
         }
+    }
+
+    private var savedSessionsSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Sessions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            Button {
+                presentSessionManager()
+            } label: {
+                Label("Saved Sessions", systemImage: "rectangle.stack")
+            }
+            .buttonStyle(.plain)
+            LabeledContent("Profiles", value: profileCountValue)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Saved terminal sessions")
     }
 
     @ViewBuilder

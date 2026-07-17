@@ -131,3 +131,27 @@ substitute for Developer ID/hardened-runtime/notarization assessment or future
 SFTP and remote-path threat modeling. Exact source, packaged-app, stored-data, and
 log-inspection evidence and known limitations are in
 [`docs/audits/0005-phase-3-session-manager-evidence.md`](docs/audits/0005-phase-3-session-manager-evidence.md).
+
+## Phase 4A remote-workspace implementation notes
+
+- Remote filenames and attributes are treated as untrusted raw bytes. Identity is
+  never derived from display text; invalid or control bytes are escaped for
+  display only. Nothing evaluates a remote name, builds a shell command from it,
+  or follows a symlink during listing.
+- The shipping remote provider is `UnavailableRemoteFileProvider`; ADR 0007
+  prohibits parsing human `sftp`/`ls` output, implementing SFTP from scratch,
+  adding an SSH dependency silently, or weakening OpenSSH host-key validation.
+  No `StrictHostKeyChecking` override exists anywhere in the source.
+- Copy actions write exactly one plain-text pasteboard item, append no Return,
+  and are disabled when the raw path has no lossless text representation.
+  Clipboard contents, terminal contents, provider streams, and remote paths are
+  never logged; user-facing errors use bounded, escaped typed messages.
+- Every provider request is owned by its runtime, bounded (32 directories,
+  20,000 cached entries, 10,000 entries and 32 MiB per response, 32 KiB paths,
+  4 KiB components, two concurrent requests), and cancelled on close. There is
+  no polling, recursive enumeration, prefetch, or per-row task creation.
+- The simulated developer fixture activates only on the exact
+  `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` environment value, contains only
+  synthetic `/simulated` data, labels every listing simulated, and fails closed
+  into the transport-unavailable state. It must never be described as a real
+  Relay Host listing.

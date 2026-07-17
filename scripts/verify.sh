@@ -27,18 +27,23 @@ required_files=(
   docs/design-docs/macos-app-behavior.md
   docs/design-docs/remote-files-ux.md
   docs/design-docs/editor-sync-ux.md
+  docs/design-docs/remote-workspace.md
   docs/checklists/interaction-parity.md
   docs/checklists/terminal-acceptance.md
   docs/checklists/ssh-terminal-acceptance.md
   docs/checklists/session-manager-acceptance.md
+  docs/checklists/remote-workspace-acceptance.md
   docs/audits/0001-second-pass-gap-audit.md
   docs/audits/0002-phase-1-local-terminal-evidence.md
   docs/audits/0003-phase-2-ssh-terminal-evidence.md
   docs/audits/0004-phase-2-tab-strip-polish-evidence.md
   docs/audits/0005-phase-3-session-manager-evidence.md
+  docs/audits/0006-phase-4a-remote-workspace-evidence.md
   docs/decisions/0003-terminal-engine-selection.md
   docs/decisions/0004-macos-sandbox-and-distribution.md
   docs/decisions/0005-session-profile-persistence.md
+  docs/decisions/0006-session-centric-runtime-architecture.md
+  docs/decisions/0007-remote-file-provider-transport.md
   docs/exec-plans/0001-bootstrap.md
   docs/exec-plans/0002-terminal-foundation.md
   docs/exec-plans/0003-native-local-terminal-vertical-slice.md
@@ -46,6 +51,7 @@ required_files=(
   docs/exec-plans/0005-phase-2-ssh-terminal-integration.md
   docs/exec-plans/0006-phase-2-tab-strip-polish.md
   docs/exec-plans/0007-phase-3-native-session-manager.md
+  docs/exec-plans/0008-phase-4a-remote-workspace-foundation.md
 )
 
 for file in "${required_files[@]}"; do

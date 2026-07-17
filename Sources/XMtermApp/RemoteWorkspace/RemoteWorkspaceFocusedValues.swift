@@ -27,9 +27,14 @@ struct RemoteWorkspaceFocusedActions {
     }
 
     @MainActor
+    var isOwnerCurrent: Bool {
+        currentOwner() == owner
+    }
+
+    @MainActor
     @discardableResult
     func perform(_ action: RemoteWorkspaceAction) -> Bool {
-        guard currentOwner() == owner,
+        guard isOwnerCurrent,
               policy.isEnabled(action) else { return false }
         actionHandler(action)
         return true

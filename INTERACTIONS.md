@@ -33,15 +33,21 @@ coordination, and remote files remain deferred. `SESS-001` through `SESS-006`,
 `TAB-002` through `TAB-005`, and `TERM-STATE-001` therefore remain partial against
 their broader canonical scope.
 
-## Implementation status note — Phase 4A planning boundary
+## Implementation status note — Phase 4A foundation implemented; transport blocked
 
-The Phase 4A Remote Workspace Foundation design and execution plan add
-`SESS-011`, `FILE-WORKSPACE-001`, `FILE-NAV-002`, `FILE-CACHE-001`,
-`FILE-STATE-001`, and `FILE-COPY-001` before implementation. The locked phase is a
-session-owned, read-only, immediate-child browser with single selection, bounded
-cache/state, native navigation, and exact text-copy actions. Mutation, transfer,
-multi/range selection, remote-object clipboard, drag-and-drop, file opening,
-terminal-directory following, and editor sync remain deferred.
+The Phase 4A Remote Workspace Foundation implements `SESS-011`,
+`FILE-WORKSPACE-001`, `FILE-NAV-002`, `FILE-CACHE-001`, `FILE-STATE-001`, and
+`FILE-COPY-001` for the locked scope: each launched SSH runtime owns one
+read-only, immediate-child workspace with single selection, bounded cache/state,
+provider-resolved transactional navigation with Back/Forward/Parent/breadcrumbs/
+Refresh, honest per-state presentation, a native sidebar below compact Saved
+Sessions, focused menu/context commands with exact-owner guards, and exact
+plain-text path copy actions. Local runtimes own no provider, cache, or remote
+task. `FILE-SEL-001`, `FILE-NAV-001`, `FILE-OPS-001`, and `FILE-LIST-001` remain
+Partial: only their single-selection/read-only subsets are implemented. Mutation,
+transfer, multi/range selection, remote-object clipboard, drag-and-drop, file
+opening, terminal-directory following, and editor sync remain deferred to later
+phases.
 
 The stock macOS `/usr/bin/sftp` client exposes only human-formatted directory
 listings and cannot safely preserve every legal remote filename. Human `ls` parsing

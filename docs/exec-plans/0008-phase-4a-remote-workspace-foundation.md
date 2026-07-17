@@ -579,17 +579,17 @@ Repeat all three focused suites.
 - Modify: `Sources/XMtermApp/TerminalWorkspaceCommands.swift`
 - Modify: `Tests/XMtermAppTests/TerminalWorkspaceCommandTests.swift`
 
-- [ ] **Step 1: Write RED focused-command/store policy tests**
+- [x] **Step 1: Write RED focused-command/store policy tests**
 
 Cover selected-runtime routing, no stale previous-tab workspace, local disabled
 commands, SSH Back/Forward/Parent/Refresh, `Command-Down`, `Command-Up`, focused
 Copy, context-menu parity, and terminal command routing remaining unchanged.
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 Run `swift test --filter TerminalWorkspaceCommandTests`.
 
-- [ ] **Step 3: Implement the sidebar in small views**
+- [x] **Step 3: Implement the sidebar in small views**
 
 Keep Saved Sessions compact. Observe only the selected runtime's workspace in the
 remote subview. Use native `List`/selection/disclosure behavior, structured
@@ -597,13 +597,13 @@ breadcrumbs, 240...420 resizable width, explicit states, Retry, double-click ope
 keyboard open/parent, context actions, and accessibility labels. Do not add a full
 toolbar, settings redesign, transfer affordance, or file-open action.
 
-- [ ] **Step 4: Preserve terminal identity and focus**
+- [x] **Step 4: Preserve terminal identity and focus**
 
 Keep `TerminalPane` keyed by the existing terminal-session identity. Workspace
 publication must not recreate or refocus it. Switching to a local tab clears the
 remote presentation immediately.
 
-- [ ] **Step 5: Confirm focused GREEN and build**
+- [x] **Step 5: Confirm focused GREEN and build**
 
 Run:
 
@@ -633,21 +633,21 @@ Run `swift test --filter RemoteWorkspacePerformanceTests`. Record repeated timin
 cache counts, process memory delta where measurable, and whether debug/test overhead
 is included.
 
-- [ ] **Step 3: Run focused coverage**
+- [x] **Step 3: Run focused coverage**
 
 Run `swift test --enable-code-coverage` and report coverage for testable
 `XMtermRemote` plus new app policy/state files separately from whole-source
 coverage. The project target remains at least 80%; never conflate scoped and whole
 source values.
 
-- [ ] **Step 4: Run security/source policy scans**
+- [x] **Step 4: Run security/source policy scans**
 
 Inspect for secrets, logging, shell wrappers, command interpolation, host-key
 bypass, `sftp ls` parsing, unbounded task creation, polling, recursive enumeration,
 remote mutation verbs, and generated artifacts. Review every dependency license;
 the expected new external dependency count is zero.
 
-- [ ] **Step 5: Run full verification from a clean build state**
+- [x] **Step 5: Run full verification from a clean build state**
 
 Run:
 
@@ -659,7 +659,7 @@ swift package clean
 Record test/suite counts and wall times. A clean build and all Phase 1–3 regression
 checks must pass.
 
-- [ ] **Step 6: Build/package and exercise the foundation manually**
+- [x] **Step 6: Build/package and exercise the foundation manually**
 
 Using deterministic developer injection only, verify local no-workspace state,
 mock SSH loading/listing/empty/error/navigation/refresh/copy/tab-switch/close,
@@ -704,36 +704,36 @@ If these rows remain blocked, mark Phase 4A Partial and do not begin Phase 4B.
 
 **Files:** all contract/design/evidence files listed in the file map
 
-- [ ] **Step 1: Update current architecture and product status honestly**
+- [x] **Step 1: Update current architecture and product status honestly**
 
 Document the aggregate, new target, path/entry/provider/cache/state seams, sidebar,
 test counts, performance, security, and exact blocked transport boundary. Preserve
 historical audit text.
 
-- [ ] **Step 2: Update roadmap phase split**
+- [x] **Step 2: Update roadmap phase split**
 
 Rename current Phase 4A to Remote Workspace Foundation. Move mutation, transfers,
 multi-selection, remote-object clipboard, drag/drop, collision, and integrity work
 to Phase 4B. Keep terminal-directory synchronization and editor sync later.
 
-- [ ] **Step 3: Walk the interaction checklist**
+- [x] **Step 3: Walk the interaction checklist**
 
 Mark only direct evidence `[x]`; every other row says Partial, Deferred, Blocked,
 Not applicable, Not performed, or Not encountered.
 
-- [ ] **Step 4: Run independent correctness and security review**
+- [x] **Step 4: Run independent correctness and security review**
 
 Review runtime cleanup, stale results, path identity, selection/history, cache
 bounds, MainActor isolation, accessibility/focus, forbidden Phase 4B surface, and
 all error/logging paths. Fix Critical/High findings test-first.
 
-- [ ] **Step 5: Run final verification and inspect the complete change set**
+- [x] **Step 5: Run final verification and inspect the complete change set**
 
 Run `./scripts/verify.sh` again, inspect every changed/new file, confirm no secret,
 machine-specific fixture path, build artifact, or parent-repository change was
 introduced, and record exact final results.
 
-- [ ] **Step 6: Publish the exact completion status and next task**
+- [x] **Step 6: Publish the exact completion status and next task**
 
 If Task 9 passes, mark Phase 4A complete and recommend exactly **Phase 4B — Remote
 File Mutations and Transfers**. If Task 9 remains blocked, mark Phase 4A Partial and

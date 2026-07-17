@@ -134,3 +134,25 @@ and
 [`docs/audits/0005-phase-3-session-manager-evidence.md`](docs/audits/0005-phase-3-session-manager-evidence.md).
 The Phase 4 SFTP, directory-listing, transfer, and editor-sync budgets above remain
 future gates; Phase 3 introduced none of those systems.
+
+## Phase 4A Remote Workspace Foundation evidence
+
+The Phase 4A workspace adds no polling loop, timer, recursive enumeration,
+prefetch, per-entry task, or per-row remote `stat`. Remote work runs off
+`MainActor` through one provider actor per SSH runtime with at most two
+concurrent requests and one per directory; only immutable listing values publish
+on the main actor. Idle workspaces schedule no work. The sidebar flattens only
+already-cached listings inside the bounded expansion set, so listing publication
+performs no provider I/O.
+
+The deterministic 1,000-entry benchmark (`RemoteWorkspacePerformanceTests`)
+measures fixture construction separately from the model/order/cache-publication
+segment and observed **20.84 ms p90** against the 100 ms budget (one warm-up plus
+11 publications; debug test overhead included). Cache bounds (32 directories,
+20,000 entries, 10,000 entries/32 MiB per response) and provider-concurrency
+bounds are asserted by `RemoteWorkspaceBoundednessTests` and the provider
+contract suite. Cold launch, Instruments main-thread stall capture, resident
+memory with a populated workspace, and the 10,000-entry release gate remain
+unmeasured and open; the packaged simulated-fixture inspection recorded in
+`docs/audits/0006-phase-4a-remote-workspace-evidence.md` is qualitative, not a
+release benchmark.

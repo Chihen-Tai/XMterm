@@ -161,7 +161,7 @@ final class TerminalWorkspaceStore {
             )
         },
         remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { _, _ in
-            RemoteWorkspace(provider: UnavailableRemoteFileProvider())
+            RemoteWorkspace(provider: RemoteWorkspaceDeveloperFixture.provider())
         }
     ) {
         self.closeDispositionResolver = closeDispositionResolver

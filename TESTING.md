@@ -265,7 +265,7 @@ Phase 3 adds deterministic coverage for:
 - coordinator ordering, recency only after successful tab creation, error
   surfacing, accessibility presentation copy, and existing terminal coexistence.
 
-The final isolated coverage invocation passed **268 tests in 35 suites in 7.199
+The Phase 3 isolated coverage invocation passed **268 tests in 35 suites in 7.199
 seconds**. Coverage is reported at three deliberately different scopes:
 
 - all first-party `Sources`: **53.79% lines**, **58.54% functions**;
@@ -289,3 +289,53 @@ known limitations are recorded in
 `docs/audits/0005-phase-3-session-manager-evidence.md`. No SFTP, remote-file, or
 editor-sync test is attributed to Phase 3 because those implementations have not
 started.
+
+## Phase 4A Remote Workspace verification
+
+Phase 4A adds deterministic Swift Testing coverage for:
+
+- raw-byte path identity, Unicode/invalid-byte safe display, breadcrumbs, shell
+  quoting, and validation limits (`RemotePathTests`, `RemoteFileEntryTests`);
+- the provider contract, all typed error categories, cancellation, close, and
+  listing bounds (`RemoteFileProviderContractTests`);
+- the bounded LRU cache (`RemoteDirectoryCacheTests`) and workspace state machine
+  navigation/history/refresh/expansion/race/close behavior
+  (`RemoteWorkspaceTests` plus lifecycle, close-settlement, boundedness, and
+  contract suites);
+- session-centric runtime composition, store registry migration, and aggregate
+  close settlement (`RuntimeSessionTests`, store suites);
+- presentation, sidebar policy, and pasteboard policies
+  (`RemoteWorkspacePresentationTests`, `RemoteWorkspaceSidebarPolicyTests`,
+  `RemotePathPasteboardTests`);
+- focused command routing: exact-owner guards, stale-tab rejection,
+  Back/Forward/Parent/Refresh/open/retry routing to the exact workspace methods,
+  copy routing through the pasteboard adapter, sidebar interaction routing,
+  `Command-Down`/`Command-Up` bindings, an unbound Return, and unchanged terminal
+  command routing (`TerminalWorkspaceCommandTests`, 18 tests);
+- the explicit env-gated simulated developer fixture
+  (`RemoteWorkspaceDeveloperFixtureTests`);
+- the 1,000-entry model/order/publication performance gate
+  (`RemoteWorkspacePerformanceTests`, 20.84 ms p90 against the 100 ms budget).
+
+On 2026-07-17 the full-suite coverage invocation passed **404 tests in 51 suites
+in 9.967 seconds**. Coverage is reported at deliberately different scopes:
+
+- `XMtermRemote` sources: **93.27% lines**, **94.25% functions**;
+- new app remote-workspace policy/runtime logic excluding SwiftUI view bodies
+  (`RemoteWorkspacePresentation`, `RemotePathPasteboard`,
+  `RemoteWorkspaceFocusedValues`, `RemoteWorkspaceDeveloperFixture`,
+  `RuntimeSession`): **94.49% lines**, **82.54% functions**;
+- the UI-inclusive remote-workspace app scope, including declarative
+  `RemoteWorkspaceSidebar`/`RemoteEntryRow` bodies and menu commands the unit
+  harness cannot instantiate: **42.29% lines**, **45.89% functions**;
+- all first-party `Sources`: **58.11% lines**, **63.42% functions**.
+
+The lower UI-inclusive and whole-source numbers are retained so the scoped logic
+results are never misrepresented as application-wide coverage. Isolated
+`-Xswiftc -warnings-as-errors` debug and release builds completed cleanly in
+**82.55 s** and **147.59 s**. SwiftUI listing rows, sidebar composition, and menu
+rendering remain covered by source review plus the packaged simulated-fixture
+manual pass recorded in
+`docs/audits/0006-phase-4a-remote-workspace-evidence.md`; no automated result is
+claimed for them. Automated tests never contact the real Relay Host, and no
+simulated listing is presented as real remote evidence.

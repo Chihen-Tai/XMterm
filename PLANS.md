@@ -131,22 +131,61 @@ outside Phase 3. Automatic alias discovery/import, `ssh -G` presentation, reconn
 sleep/wake recovery, ProxyJump editing, automatic second hops, SFTP, remote files,
 editor sync, distribution signing, and notarization remain deferred.
 
-Exact recommended next task: **Phase 4A — Remote SFTP File Browsing**.
+## Partial — Phase 4A — Remote Workspace Foundation
 
-## Next — Phase 4A — Remote SFTP File Browsing
+- [x] Lock the Phase 4A contract: `SESS-011`, `FILE-WORKSPACE-001`, `FILE-NAV-002`,
+  `FILE-CACHE-001`, `FILE-STATE-001`, and `FILE-COPY-001` in `INTERACTIONS.md`,
+  the remote-workspace design, ADR 0006, ADR 0007, and Execution Plan 0008.
+- [x] Add the dependency-free `XMtermRemote` target with raw-byte `RemotePath`
+  identity, safe escaped display, entries with honest optional metadata,
+  deterministic ordering, bounded listings, and typed `RemoteFileError` values.
+- [x] Define the sendable `RemoteFileProvider` boundary with a deterministic
+  `InMemoryRemoteFileProvider` and the honest shipping
+  `UnavailableRemoteFileProvider`.
+- [x] Implement the bounded per-runtime LRU directory cache and the `@MainActor`
+  observable workspace state machine with success-only navigation publication,
+  reciprocal history, refresh, lazy expansion, generation-guarded stale-result
+  rejection, and settled close.
+- [x] Migrate the window registry to session-centric `RuntimeSession` aggregates
+  owning the retained terminal and an optional workspace as isolated siblings
+  with aggregate close settlement.
+- [x] Implement the immutable presentation/action policies, exact-owner focused
+  actions, and the lossless single-item plain-text pasteboard adapter.
+- [x] Add the native Remote Workspace sidebar (states, navigation, breadcrumbs,
+  single selection, lazy disclosure, context/menu copy actions, Command-Down/Up),
+  keep Saved Sessions compact above it, and preserve terminal identity and
+  command routing.
+- [x] Pass the 1,000-entry model/order/publication performance gate (20.84 ms p90
+  against the 100 ms budget) and the full repository verifier.
+- [x] Add the explicit env-gated simulated developer fixture for packaged
+  foundation verification; the shipping composition stays honestly
+  transport-unavailable.
+- [ ] **Blocked (ADR 0007 Proposed):** reviewed structured SFTP packet adapter over
+  system OpenSSH, production provider, and real Relay Host listing plus manual
+  acceptance. No human `ls` parsing, custom SFTP implementation, or silent
+  dependency is permitted.
 
-- [ ] Add `RemoteFileService` protocol and fake implementation.
-- [ ] Lazy directory navigation for the active session.
-- [ ] Implement stable file identity and single/multiple/range selection.
-- [ ] Implement Copy, Cut, Paste, Move, Rename, Duplicate, Delete, New File/Folder.
+Status: **PARTIAL** — session-centric runtime, remote domain, provider boundary,
+state machine, cache, native simulated UI, navigation, copy actions, testing, and
+performance foundation implemented. Production structured SFTP transport and the
+real Relay Host listing remain blocked by ADR 0007.
+
+Exact recommended next task: **Complete Phase 4A production SFTP transport under
+ADR 0007.**
+
+## Then — Phase 4B — Remote File Mutations and Transfers
+
+- [ ] Implement stable multi/range selection and batch actions.
+- [ ] Implement Copy, Cut, Paste, Move, Rename, Duplicate, Delete, New File/Folder
+  with the private remote-entry pasteboard representation.
 - [ ] Implement remote-to-remote drag move/copy.
 - [ ] Implement Finder upload/download drag-and-drop.
 - [ ] Implement name-collision sheet, batch progress, cancellation, and per-item
   errors.
-- [ ] Add sorting, type-to-select, path entry, Back/Forward/Up, hidden files,
-  Quick Look-style preview, metadata/symlink handling, and selection recovery.
-- [ ] Add revision-safe transfer staging, executable-bit preservation, retry ordering,
-  and exact structured path tests.
+- [ ] Add sorting, type-to-select, path entry, hidden-file toggle, Quick Look-style
+  preview, and selection recovery.
+- [ ] Add revision-safe transfer staging, executable-bit preservation, retry
+  ordering, and exact structured path tests.
 
 ## Then — local editor auto-sync
 

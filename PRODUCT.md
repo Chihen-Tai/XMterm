@@ -39,9 +39,20 @@ authentication and configuration semantics to `/usr/bin/ssh`. Automatic
 `~/.ssh/config` alias discovery/import and `ssh -G` presentation are not yet
 implemented.
 
-This implemented slice does not include SFTP, the remote file browser, local editor
-sync, reconnect, ProxyJump editing, automatic second hops, or distribution approval.
-Those remain roadmap requirements below; the exact Phase 3 packaged-app evidence
+The Phase 4A Remote Workspace Foundation additionally gives every launched SSH tab
+its own read-only Remote Workspace in the sidebar: session-owned navigation with
+Back/Forward/Parent/breadcrumbs/Refresh, single selection, lazy directory
+disclosure, honest loading/empty/failed/cancelled states, and exact Copy Path/
+Name/Parent/Shell-Quoted Path actions. Local tabs state plainly that Remote
+Workspace applies to SSH sessions. Because ADR 0007 blocks a safe production SFTP
+transport, the shipping app reports `Remote file transport unavailable` instead of
+fabricating a listing; a deterministic simulated developer fixture exists only
+behind an explicit environment opt-in and is always labeled simulated.
+
+This implemented slice does not include a production remote listing, file
+mutation, transfers, multi-selection, drag-and-drop, local editor sync, reconnect,
+ProxyJump editing, automatic second hops, or distribution approval. Those remain
+roadmap requirements below; the exact Phase 3 packaged-app evidence
 and manual limitations are recorded in
 [`docs/audits/0005-phase-3-session-manager-evidence.md`](docs/audits/0005-phase-3-session-manager-evidence.md).
 

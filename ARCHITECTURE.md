@@ -238,9 +238,60 @@ state, SSH behavior, profile persistence, or the retained terminal view. Stable 
 IDs remain the only identity used by the lazy sequence, and terminal-surface
 identity in `RootView` remains the selected session ID.
 
+### Session-centric runtime and remote workspace boundary
+
+Phase 4A replaces the window store's direct tab-to-terminal registry with a
+session-centric aggregate and adds a dependency-free `XMtermRemote` target:
+
+```text
+RootView
+└── TerminalWorkspaceStore                window tab/runtime registry
+    └── [TerminalTab.ID: RuntimeSession]
+        ├── id: TerminalSessionID          launched runtime identity
+        ├── launchSpecification            immutable profile snapshot
+        ├── terminal: TerminalSession      retained PTY/view capability (unchanged)
+        └── remoteWorkspace: RemoteWorkspace?
+            ├── RemoteFileProvider         one per SSH runtime
+            ├── navigation/history/selection state machine
+            ├── bounded LRU directory cache
+            └── owned cancellable tasks
+
+XMtermApp -> XMtermTerminal -> XMtermCore
+         -> XMtermRemote   -> XMtermCore
+```
+
+Workspace eligibility comes from the immutable `.ssh` launch target. Two tabs
+launched from one saved profile own independent providers, caches, histories,
+selections, and tasks. Terminal and workspace start independently; a workspace
+failure never changes terminal lifecycle. Closing a runtime cancels its workspace,
+requests terminal close, and publishes aggregate cleanup only after both settle
+(ADR 0006).
+
+`XMtermRemote` owns raw-byte `RemotePath`/`RemoteFileEntry` identity, safe escaped
+display, bounded `RemoteDirectoryListing` values, typed `RemoteFileError`
+categories, the sendable `RemoteFileProvider` protocol, the deterministic
+`InMemoryRemoteFileProvider`, the honest `UnavailableRemoteFileProvider`, the
+bounded per-runtime LRU `RemoteDirectoryCache`, and the `@MainActor` observable
+`RemoteWorkspace` state machine. Navigation publishes a directory as current only
+after its listing succeeds; newer request generations always win; refresh changes
+no history; expansion is lazy and immediate-child-only.
+
+`XMtermApp` owns the native presentation: `RemoteWorkspaceSidebar` below compact
+Saved Sessions in the `NavigationSplitView` sidebar (240–420 points), pure
+presentation/action policies, exact-owner focused commands and the Remote menu,
+context-menu copy actions, and the single plain-text-item pasteboard adapter.
+Workspace publication never recreates or refocuses the retained terminal view,
+which stays keyed by terminal-session identity. The shipping provider reports an
+honest transport-unavailable state while ADR 0007 blocks the production structured
+SFTP adapter; an explicit `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` environment
+value opts a developer build into a deterministic in-memory graph whose listings
+are labeled simulated.
+
 ### Remote file boundary
 
-All remote operations go through `RemoteFileService`. UI code receives structured values, never parses human-formatted command output.
+All remote operations go through the Phase 4A `RemoteFileProvider` boundary (the
+earlier `RemoteFileService` naming refers to the same seam's future mutation and
+transfer surface). UI code receives structured values, never parses human-formatted command output.
 
 The first implementation may wrap system OpenSSH tools, but the abstraction must allow a later native SFTP implementation without changing UI or domain code. Effective
 SSH options are delegated to system OpenSSH; UI alias discovery is never the source
