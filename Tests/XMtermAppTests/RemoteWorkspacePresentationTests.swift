@@ -153,6 +153,20 @@ struct RemoteWorkspacePresentationTests {
         )
     }
 
+    @Test("[FILE-STATE-001] only the trusted simulated provider mode produces the SIMULATED badge")
+    func simulatedBadgeComesOnlyFromTrustedProviderMode() {
+        #expect(RemoteWorkspacePresentation.simulatedBadge(for: .production) == nil)
+        #expect(RemoteWorkspacePresentation.simulatedBadge(for: .unavailable) == nil)
+
+        let badge = RemoteWorkspacePresentation.simulatedBadge(
+            for: .simulatedDeveloperFixture
+        )
+        #expect(badge?.title == "SIMULATED")
+        #expect(badge?.detail == "Developer fixture — not a real remote host")
+        #expect(badge?.accessibilityLabel.contains("Simulated") == true)
+        #expect(badge?.accessibilityLabel.contains("not a real remote host") == true)
+    }
+
     private func entry(
         path: String,
         kind: RemoteFileEntry.Kind,

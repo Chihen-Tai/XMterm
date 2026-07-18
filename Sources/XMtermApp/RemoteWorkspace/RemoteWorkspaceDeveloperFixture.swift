@@ -14,22 +14,48 @@ enum RemoteWorkspaceDeveloperFixture {
     static let capabilityNotes =
         "Simulated in-memory developer fixture listing. This is not a real remote host."
 
+    /// Compile-time boundary: only debug/developer builds may honor the
+    /// environment opt-in. Release binaries always compose the honest
+    /// transport-unavailable provider until ADR 0007's transport ships.
+    #if DEBUG
+    static let isDeveloperBuild = true
+    #else
+    static let isDeveloperBuild = false
+    #endif
+
+    /// Provider plus its trusted mode, so composition cannot pair the simulated
+    /// provider with a non-simulated presentation or vice versa.
+    struct Composition {
+        let provider: any RemoteFileProvider
+        let mode: RemoteProviderMode
+    }
+
     static func isEnabled(environment: [String: String]) -> Bool {
         environment[environmentKey] == simulatedValue
     }
 
-    static func provider(
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> any RemoteFileProvider {
-        guard isEnabled(environment: environment) else {
-            return UnavailableRemoteFileProvider()
+    static func composition(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isDeveloperBuild: Bool = Self.isDeveloperBuild
+    ) -> Composition {
+        guard isDeveloperBuild, isEnabled(environment: environment) else {
+            return Composition(
+                provider: UnavailableRemoteFileProvider(),
+                mode: .unavailable
+            )
         }
         do {
-            return try simulatedProvider()
+            return Composition(
+                provider: try simulatedProvider(),
+                mode: .simulatedDeveloperFixture
+            )
         } catch {
             // Fail closed into the honest transport-unavailable state rather than
             // presenting a partially built simulated graph.
-            return UnavailableRemoteFileProvider()
+            return Composition(
+                provider: UnavailableRemoteFileProvider(),
+                mode: .unavailable
+            )
         }
     }
 

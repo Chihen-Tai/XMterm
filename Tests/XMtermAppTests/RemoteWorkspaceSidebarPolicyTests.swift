@@ -193,6 +193,7 @@ struct RemoteWorkspaceSidebarPolicyTests {
         let focusedActions = RemoteWorkspaceFocusedActions(
             owner: firstOwner,
             policy: policy,
+            isWorkspaceFocused: { true },
             currentOwner: { selectedOwner },
             perform: { performed.append($0) }
         )
@@ -222,6 +223,7 @@ struct RemoteWorkspaceSidebarPolicyTests {
         let focusedActions = RemoteWorkspaceFocusedActions(
             owner: owner,
             policy: policy,
+            isWorkspaceFocused: { true },
             currentOwner: { owner },
             perform: { performed.append($0) }
         )

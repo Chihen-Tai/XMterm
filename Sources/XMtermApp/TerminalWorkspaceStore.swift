@@ -161,7 +161,11 @@ final class TerminalWorkspaceStore {
             )
         },
         remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { _, _ in
-            RemoteWorkspace(provider: RemoteWorkspaceDeveloperFixture.provider())
+            let composition = RemoteWorkspaceDeveloperFixture.composition()
+            return RemoteWorkspace(
+                provider: composition.provider,
+                providerMode: composition.mode
+            )
         }
     ) {
         self.closeDispositionResolver = closeDispositionResolver

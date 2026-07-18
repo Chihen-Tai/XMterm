@@ -339,3 +339,34 @@ manual pass recorded in
 `docs/audits/0006-phase-4a-remote-workspace-evidence.md`; no automated result is
 claimed for them. Automated tests never contact the real Relay Host, and no
 simulated listing is presented as real remote evidence.
+
+### Phase 4A hardening additions (2026-07-18)
+
+The hardening pass adds deterministic coverage for three new boundaries:
+
+- **Trusted provider mode and release fail-closed composition**
+  (`RemoteWorkspaceDeveloperFixtureTests`, `RemoteWorkspacePresentationTests`):
+  the `RemoteProviderMode` carried by each workspace comes only from trusted
+  composition; the exact environment value activates the simulated fixture only
+  when the compile-time developer flag is true; release-parameterized
+  composition fails closed to the unavailable provider; the SIMULATED badge
+  presentation derives from the mode alone, and provider capability text
+  containing "Simulated" cannot create it.
+- **Actual workspace focus gating** (`TerminalWorkspaceCommandTests`,
+  `RemoteWorkspaceSidebarPolicyTests`): `RemoteWorkspaceFocusedActions` carries
+  an injected workspace-focus signal fed by the sidebar's `@FocusState`;
+  `RemoteWorkspaceCommandRoute` menu/shortcut routing requires focus in
+  addition to the exact owner and policy, while direct sidebar controls and
+  context menus stay focus-independent; a closed workspace performs no
+  operation for stale snapshots.
+- **Shared visible-entry projection and descendant selection**
+  (`RemoteWorkspaceVisibleEntryProjectionTests`,
+  `RemoteWorkspaceDescendantSelectionTests`): one pure projection produces both
+  the rendered rows and the selectable-path set (rows, depths, honest status
+  rows, bounded depth equal to the workspace expansion bound, raw-byte and
+  lossy-path identity, and a 1,000-entry projection/lookup budget); workspace
+  selection accepts exactly the projected entries, collapse moves a hidden
+  descendant selection to the collapsed directory, refresh restores only the
+  exact surviving raw path (nearest-visible-ancestor repair, never display-name
+  redirection), history restores exact recorded paths only, and selection never
+  triggers provider I/O.

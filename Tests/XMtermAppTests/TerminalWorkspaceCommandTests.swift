@@ -203,6 +203,7 @@ struct TerminalWorkspaceCommandTests {
             actions: RemoteWorkspaceFocusedActions(
                 owner: owner,
                 policy: filePolicy,
+                isWorkspaceFocused: { true },
                 currentOwner: { owner },
                 perform: { performed.append($0) }
             )
@@ -449,6 +450,7 @@ struct TerminalWorkspaceCommandTests {
             runtimeID: firstRuntimeID,
             workspace: firstWorkspace,
             pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter()),
+            isWorkspaceFocused: { true },
             currentOwner: { [weak store] in store?.selectedRemoteWorkspaceFocusOwner }
         )
         let route = RemoteWorkspaceCommandRoute(actions: actions)
@@ -522,6 +524,188 @@ struct TerminalWorkspaceCommandTests {
         }
     }
 
+    @Test("[MAC-001, TERM-KEY-002] terminal focus disables Remote shortcut routing while direct controls keep working")
+    func terminalFocusDisablesRemoteShortcutRouting() async throws {
+        let fixture = try makeRemoteFixture()
+        let provider = fixture.makeProvider()
+        let workspace = RemoteWorkspace(provider: provider)
+        let runtimeID = TerminalSessionID()
+        var workspaceFocused = false
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+
+        // Built after availability, mirroring the sidebar's per-render rebuild.
+        let actions = RemoteWorkspaceFocusedActions.forRuntime(
+            runtimeID: runtimeID,
+            workspace: workspace,
+            pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter()),
+            isWorkspaceFocused: { workspaceFocused },
+            currentOwner: {
+                RemoteWorkspaceFocusOwner(
+                    runtimeID: runtimeID,
+                    workspaceID: workspace.id
+                )
+            }
+        )
+        let route = RemoteWorkspaceCommandRoute(actions: actions)
+
+        #expect(!actions.hasWorkspaceFocus)
+        #expect(!route.isEnabled(.refresh))
+        #expect(!route.perform(.refresh))
+
+        // Direct sidebar controls (nav buttons, retry) bypass the keyboard gate.
+        #expect(actions.perform(.refresh))
+        try await waitUntil { workspacePendingSettled(workspace) }
+        let listCountAfterDirect = await provider.recordedAttempts
+            .count(where: { $0 == .listDirectory })
+
+        workspaceFocused = true
+        #expect(actions.hasWorkspaceFocus)
+        #expect(route.isEnabled(.refresh))
+        #expect(route.perform(.refresh))
+        try await waitUntil { workspacePendingSettled(workspace) }
+
+        workspaceFocused = false
+        #expect(!route.isEnabled(.refresh))
+        #expect(!route.perform(.refresh))
+        let finalListCount = await provider.recordedAttempts
+            .count(where: { $0 == .listDirectory })
+        #expect(finalListCount == listCountAfterDirect + 1)
+    }
+
+    @Test("[MAC-001, FILE-NAV-002] keyboard shortcut actions route only while the workspace owns focus")
+    func keyboardShortcutsRouteOnlyWithWorkspaceFocus() throws {
+        let owner = RemoteWorkspaceFocusOwner(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        )
+        var focused = false
+        var performed: [RemoteWorkspaceAction] = []
+        let route = RemoteWorkspaceCommandRoute(
+            actions: try focusedActions(
+                owner: owner,
+                currentOwner: { owner },
+                isWorkspaceFocused: { focused },
+                performed: { performed.append($0) }
+            )
+        )
+
+        for command in RemoteWorkspaceKeyboardCommand.all {
+            #expect(!route.perform(command.action))
+        }
+        #expect(!route.perform(.refresh))
+        for action in RemoteWorkspaceCommandRoute.contextCopyActions {
+            #expect(!route.isEnabled(action))
+        }
+        #expect(performed.isEmpty)
+
+        focused = true
+        #expect(route.perform(RemoteWorkspaceKeyboardCommand.goToParent.action))
+        #expect(route.perform(RemoteWorkspaceKeyboardCommand.openSelection.action))
+        #expect(route.perform(.refresh))
+        #expect(performed == [.goToParent, .openSelection, .refresh])
+    }
+
+    @Test("[SESS-011, FILE-STATE-001] a closed workspace performs no operation for stale focused actions")
+    func closingWorkspaceInvalidatesFocusedActions() async throws {
+        let fixture = try makeRemoteFixture()
+        let provider = fixture.makeProvider()
+        let workspace = RemoteWorkspace(provider: provider)
+        let runtimeID = TerminalSessionID()
+        let actions = RemoteWorkspaceFocusedActions.forRuntime(
+            runtimeID: runtimeID,
+            workspace: workspace,
+            pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter()),
+            isWorkspaceFocused: { true },
+            currentOwner: {
+                RemoteWorkspaceFocusOwner(
+                    runtimeID: runtimeID,
+                    workspaceID: workspace.id
+                )
+            }
+        )
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+
+        await workspace.close()
+        #expect(workspace.availability == .closed)
+        let listCountAfterClose = await provider.recordedAttempts
+            .count(where: { $0 == .listDirectory })
+
+        // The stale snapshot may still dispatch, but the closed workspace
+        // re-guards every method, so no provider work or state change occurs.
+        _ = actions.perform(.refresh)
+        _ = actions.perform(.goBack)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(workspace.availability == .closed)
+        let finalListCount = await provider.recordedAttempts
+            .count(where: { $0 == .listDirectory })
+        #expect(finalListCount == listCountAfterClose)
+    }
+
+    @Test("[FILE-COPY-001, FILE-SEL-001] copy actions target the exact selected descendant")
+    func copyActionsTargetSelectedDescendant() async throws {
+        let fixture = try makeRemoteFixture()
+        let workspace = RemoteWorkspace(provider: fixture.makeProvider())
+        let writer = CommandTestPasteboardWriter()
+        let performer = RemoteWorkspaceActionPerformer(
+            workspace: workspace,
+            pasteboard: RemotePathPasteboard(writer: writer)
+        )
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+
+        workspace.setExpanded(fixture.reports.path, isExpanded: true)
+        try await waitUntil {
+            if case .loaded = workspace.directoryStates[fixture.reports.path] {
+                return true
+            }
+            return false
+        }
+        workspace.selectEntry(fixture.summary.path)
+        #expect(workspace.selectedEntry == fixture.summary.path)
+
+        performer.perform(.copyPath)
+        performer.perform(.copyName)
+        performer.perform(.copyParentDirectory)
+        #expect(writer.writtenItems == [
+            "/work/reports/summary.txt",
+            "summary.txt",
+            "/work/reports"
+        ])
+    }
+
+    @Test("[FILE-NAV-002, FILE-SEL-001] Command-Down opens only a selected descendant directory")
+    func commandDownOpensOnlySelectedDescendantDirectories() async throws {
+        let fixture = try makeRemoteFixture()
+        let workspace = RemoteWorkspace(provider: fixture.makeProvider())
+        let performer = RemoteWorkspaceActionPerformer(
+            workspace: workspace,
+            pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter())
+        )
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+
+        workspace.setExpanded(fixture.reports.path, isExpanded: true)
+        try await waitUntil {
+            if case .loaded = workspace.directoryStates[fixture.reports.path] {
+                return true
+            }
+            return false
+        }
+
+        workspace.selectEntry(fixture.summary.path)
+        #expect(!performer.currentPolicy().isEnabled(.openSelection))
+        performer.perform(.openSelection)
+        try await waitUntil { workspacePendingSettled(workspace) }
+        #expect(workspace.currentDirectory == fixture.work)
+
+        workspace.selectEntry(fixture.archive.path)
+        #expect(performer.currentPolicy().isEnabled(.openSelection))
+        performer.perform(.openSelection)
+        try await waitUntil { workspace.currentDirectory == fixture.archive.path }
+    }
+
     @Test("[FILE-WORKSPACE-001] Return stays unbound and rename stays unavailable in Phase 4A")
     func returnKeyRemainsUnbound() {
         #expect(RemoteWorkspaceKeyboardCommand.all == [.openSelection, .goToParent])
@@ -548,6 +732,7 @@ struct TerminalWorkspaceCommandTests {
                 runtimeID: owner.runtimeID,
                 workspace: workspace,
                 pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter()),
+                isWorkspaceFocused: { true },
                 currentOwner: { [weak store] in store?.selectedRemoteWorkspaceFocusOwner }
             )
         )
@@ -584,6 +769,8 @@ struct TerminalWorkspaceCommandTests {
         let reports: RemoteFileEntry
         let broken: RemoteFileEntry
         let readme: RemoteFileEntry
+        let archive: RemoteFileEntry
+        let summary: RemoteFileEntry
         private let directoryGraph: [RemotePath: InMemoryRemoteFileProvider.Directory]
         private let deterministicResponses: InMemoryRemoteFileProvider.DeterministicResponses
         private(set) var recordedProviders: [InMemoryRemoteFileProvider] = []
@@ -594,6 +781,8 @@ struct TerminalWorkspaceCommandTests {
             reports: RemoteFileEntry,
             broken: RemoteFileEntry,
             readme: RemoteFileEntry,
+            archive: RemoteFileEntry,
+            summary: RemoteFileEntry,
             directoryGraph: [RemotePath: InMemoryRemoteFileProvider.Directory],
             deterministicResponses: InMemoryRemoteFileProvider.DeterministicResponses
         ) {
@@ -601,6 +790,8 @@ struct TerminalWorkspaceCommandTests {
             self.reports = reports
             self.broken = broken
             self.readme = readme
+            self.archive = archive
+            self.summary = summary
             self.directoryGraph = directoryGraph
             self.deterministicResponses = deterministicResponses
         }
@@ -627,16 +818,20 @@ struct TerminalWorkspaceCommandTests {
         let reports = try entry("/work/reports", kind: .directory)
         let broken = try entry("/work/broken", kind: .directory)
         let readme = try entry("/work/readme.txt", kind: .regular)
+        let archive = try entry("/work/reports/archive", kind: .directory)
         let summary = try entry("/work/reports/summary.txt", kind: .regular)
         return RemoteCommandFixture(
             work: work,
             reports: reports,
             broken: broken,
             readme: readme,
+            archive: archive,
+            summary: summary,
             directoryGraph: [
                 try path("/"): .init(entries: [try entry("/work", kind: .directory)]),
                 work: .init(entries: [reports, broken, readme]),
-                reports.path: .init(entries: [summary])
+                reports.path: .init(entries: [archive, summary]),
+                archive.path: .init(entries: [])
             ],
             deterministicResponses: .init(
                 listings: [
@@ -710,6 +905,7 @@ struct TerminalWorkspaceCommandTests {
     private func focusedActions(
         owner: RemoteWorkspaceFocusOwner,
         currentOwner: @escaping @MainActor () -> RemoteWorkspaceFocusOwner?,
+        isWorkspaceFocused: @escaping @MainActor () -> Bool = { true },
         performed: @escaping @MainActor (RemoteWorkspaceAction) -> Void
     ) throws -> RemoteWorkspaceFocusedActions {
         RemoteWorkspaceFocusedActions(
@@ -721,6 +917,7 @@ struct TerminalWorkspaceCommandTests {
                 canGoForward: true,
                 selectedEntry: try entry("/work/reports", kind: .directory)
             ),
+            isWorkspaceFocused: isWorkspaceFocused,
             currentOwner: currentOwner,
             perform: performed
         )

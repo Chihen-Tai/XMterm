@@ -11,19 +11,30 @@ struct RemoteWorkspaceFocusedActions {
     let owner: RemoteWorkspaceFocusOwner
     let policy: RemoteWorkspaceActionPolicy
 
+    private let workspaceHasFocus: @MainActor () -> Bool
     private let currentOwner: @MainActor () -> RemoteWorkspaceFocusOwner?
     private let actionHandler: @MainActor (RemoteWorkspaceAction) -> Void
 
     init(
         owner: RemoteWorkspaceFocusOwner,
         policy: RemoteWorkspaceActionPolicy,
+        isWorkspaceFocused: @escaping @MainActor () -> Bool,
         currentOwner: @escaping @MainActor () -> RemoteWorkspaceFocusOwner?,
         perform: @escaping @MainActor (RemoteWorkspaceAction) -> Void
     ) {
         self.owner = owner
         self.policy = policy
+        workspaceHasFocus = isWorkspaceFocused
         self.currentOwner = currentOwner
         actionHandler = perform
+    }
+
+    /// Whether the Remote Workspace interaction surface currently owns keyboard
+    /// focus. Keyboard-shortcut and menu routing require this; direct sidebar
+    /// controls and context menus do not.
+    @MainActor
+    var hasWorkspaceFocus: Bool {
+        workspaceHasFocus()
     }
 
     @MainActor

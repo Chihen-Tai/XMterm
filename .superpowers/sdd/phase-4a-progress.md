@@ -63,3 +63,15 @@
   real Relay Host listing remain blocked by ADR 0007 (Proposed). Task 9 not
   started. No Phase 4B/5/6 work exists. Exact recommended next task: Complete
   Phase 4A production SFTP transport under ADR 0007.
+- Hardening pass (2026-07-18): complete. Slice 1 — trusted `RemoteProviderMode`
+  on the workspace, `#if DEBUG` fail-closed fixture composition, persistent
+  accessible SIMULATED badge derived from mode only (RED: 22 missing-surface
+  errors; GREEN: 15/2 suites). Slice 2 — `isWorkspaceFocused` gate in focused
+  actions fed by sidebar `@FocusState`, `focusedValue` publication, route-level
+  focus requirement (RED: 16 extra-argument errors; GREEN: 21 command tests).
+  Slice 3 — shared `RemoteWorkspaceVisibleEntryProjection` +
+  `RemotePath.isAncestor`, projection-validated descendant selection, collapse/
+  refresh/history selection repair, sidebar all-depth tagging, performer
+  projection lookups (RED: 78 missing-surface errors; GREEN: 49/4 suites).
+  Audit 0006 profraw finding marked resolved in commit `2f7ffb1`. Task 9 and
+  Phase 4B/5/6 remain untouched.

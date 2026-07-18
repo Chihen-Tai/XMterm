@@ -13,6 +13,9 @@ public final class RemoteWorkspace {
   public static let maximumScrollRestorationTokenByteCount =
     RemoteWorkspaceHistoryPolicy.maximumScrollRestorationTokenByteCount
   public let id: RemoteWorkspaceID
+  /// Trusted composition-assigned provider classification. Immutable for the
+  /// workspace's lifetime; provider responses cannot change it.
+  public let providerMode: RemoteProviderMode
   public private(set) var availability: RemoteWorkspaceAvailability = .idle
   public private(set) var currentDirectory: RemotePath?
   public private(set) var currentListing: RemoteDirectoryListing?
@@ -48,10 +51,12 @@ public final class RemoteWorkspace {
   public init(
     id: RemoteWorkspaceID = RemoteWorkspaceID(),
     provider: any RemoteFileProvider,
+    providerMode: RemoteProviderMode = .production,
     directoryCache: RemoteDirectoryCache = RemoteDirectoryCache()
   ) {
     self.id = id
     self.provider = provider
+    self.providerMode = providerMode
     self.directoryCache = directoryCache
   }
   public func start() {
@@ -62,15 +67,23 @@ public final class RemoteWorkspace {
     guard isFailed else { return }
     beginInitialLoad()
   }
+  /// The shared bounded projection of every visible loaded row. The sidebar
+  /// renders exactly these rows, and selection validation accepts exactly the
+  /// projected entry paths, so the two can never diverge.
+  public var visibleProjection: RemoteWorkspaceVisibleEntryProjection {
+    RemoteWorkspaceVisibleEntryProjection(
+      currentListing: currentListing,
+      expandedDirectories: expandedDirectories,
+      directoryStates: directoryStates
+    )
+  }
   public func selectEntry(_ path: RemotePath?) {
     guard availability == .available else { return }
     guard let path else {
       selectedEntry = nil
       return
     }
-    guard currentListing?.entries.contains(where: { $0.path == path }) == true else {
-      return
-    }
+    guard visibleProjection.isSelectable(path) else { return }
     selectedEntry = path
   }
   public func setScrollRestorationToken(
@@ -576,18 +589,19 @@ public final class RemoteWorkspace {
       forwardHistory = plan.forwardHistory
       selectedEntry = restoredSelection(
         plan.destination.selectedEntry,
-        in: listing
+        exactOnly: true
       )
       scrollRestorationToken = plan.destination.scrollRestorationToken
       pendingNavigationGeneration = nil
       pendingDirectory = nil
     case .refresh(let priorSelection):
       currentListing = listing
-      selectedEntry = restoredSelection(priorSelection, in: listing)
+      selectedEntry = restoredSelection(priorSelection, exactOnly: false)
       pendingRefreshGeneration = nil
       pendingDirectory = nil
     case .expansion:
-      break
+      // Cache insertion or eviction may have hidden the selected descendant.
+      repairSelectionIfHidden()
     }
   }
   private func applyFailedRequest(
@@ -664,6 +678,11 @@ public final class RemoteWorkspace {
   }
   private func collapse(_ path: RemotePath) {
     expandedDirectories = expandedDirectories.subtracting([path])
+    // Collapsing the ancestor of the selected descendant keeps a visible,
+    // valid selection: the collapsed directory itself.
+    if let selected = selectedEntry, path.isAncestor(of: selected) {
+      selectedEntry = path
+    }
     if let queued = queuedRequests[path] {
       queuedRequests = queuedRequests.filter { $0.key != path }
       queueOrder = queueOrder.filter { $0 != path }
@@ -689,23 +708,34 @@ public final class RemoteWorkspace {
   }
   private func isKnownDirectory(_ path: RemotePath) -> Bool {
     if path == currentDirectory { return true }
-    let listings =
-      [currentListing].compactMap { $0 }
-      + directoryStates.values.compactMap(\.visibleListing)
-    return listings.contains { listing in
-      listing.entries.contains { $0.path == path && $0.kind == .directory }
-    }
+    return visibleProjection.entry(for: path)?.kind == .directory
   }
+  /// Documented selection-restoration policy: the exact raw path survives when
+  /// it is still a visible loaded entry. Otherwise history restoration
+  /// (`exactOnly`) clears the selection, while refresh repair moves it to the
+  /// nearest still-visible ancestor directory below the current directory, or
+  /// clears it. Display-name equality never participates.
   private func restoredSelection(
     _ selection: RemotePath?,
-    in listing: RemoteDirectoryListing
+    exactOnly: Bool
   ) -> RemotePath? {
-    guard let selection,
-      listing.entries.contains(where: { $0.path == selection })
-    else {
-      return nil
+    guard let selection else { return nil }
+    let projection = visibleProjection
+    if projection.isSelectable(selection) { return selection }
+    guard !exactOnly else { return nil }
+    var ancestor = selection.parent
+    while let candidate = ancestor {
+      if candidate == currentDirectory { return nil }
+      if projection.entry(for: candidate)?.kind == .directory {
+        return candidate
+      }
+      ancestor = candidate.parent
     }
-    return selection
+    return nil
+  }
+  private func repairSelectionIfHidden() {
+    guard let selected = selectedEntry else { return }
+    selectedEntry = restoredSelection(selected, exactOnly: false)
   }
   private func nextGeneration() -> UInt64 {
     precondition(requestGeneration < UInt64.max)

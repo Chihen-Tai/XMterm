@@ -136,6 +136,11 @@ artifact) is tracked in git from an earlier commit. Recommended:
 `git rm --cached default.profraw` plus a `*.profraw` ignore entry in the next
 commit. Not applied here because this session was not asked to commit.
 
+> **Resolved in commit `2f7ffb1`:** `default.profraw` was removed from version
+> control and `*.profraw` was added to `.gitignore`. The original finding above
+> is preserved as historical context; the repository no longer tracks any
+> generated `.profraw` artifact.
+
 ## Packaged simulated manual foundation verification
 
 Staged with `./script/build_and_run.sh --verify` (ad-hoc signed, codesign

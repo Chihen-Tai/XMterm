@@ -106,6 +106,10 @@ private struct RemoteWorkspaceRuntimeView: View {
     let workspace: RemoteWorkspace
     let currentOwner: @MainActor () -> RemoteWorkspaceFocusOwner?
 
+    /// True while the workspace listing owns keyboard focus. Keyboard-shortcut
+    /// and menu routing require this; direct sidebar controls do not.
+    @FocusState private var isListingFocused: Bool
+
     private let pasteboard = RemotePathPasteboard(
         writer: AppKitRemotePathPasteboardWriter()
     )
@@ -123,6 +127,7 @@ private struct RemoteWorkspaceRuntimeView: View {
             runtimeID: runtimeID,
             workspace: workspace,
             pasteboard: pasteboard,
+            isWorkspaceFocused: { isListingFocused },
             currentOwner: currentOwner
         )
     }
@@ -145,7 +150,7 @@ private struct RemoteWorkspaceRuntimeView: View {
             Divider()
             availabilityContent
         }
-        .focusedSceneValue(\.remoteWorkspaceActions, focusedActions)
+        .focusedValue(\.remoteWorkspaceActions, focusedActions)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Remote Workspace")
     }
@@ -154,6 +159,7 @@ private struct RemoteWorkspaceRuntimeView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 5) {
+            simulatedBadgeView
             HStack(spacing: 2) {
                 navigationButton(.goBack, systemImage: "chevron.backward")
                 navigationButton(.goForward, systemImage: "chevron.forward")
@@ -166,6 +172,33 @@ private struct RemoteWorkspaceRuntimeView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+
+    /// Rendered in the always-visible header for every availability state, so it
+    /// persists across navigation, refresh, history, and breadcrumb moves.
+    @ViewBuilder
+    private var simulatedBadgeView: some View {
+        if let badge = RemoteWorkspacePresentation.simulatedBadge(
+            for: workspace.providerMode
+        ) {
+            HStack(spacing: 6) {
+                Text(badge.title)
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .foregroundStyle(.orange)
+                    .background(.orange.opacity(0.18), in: Capsule())
+                Text(badge.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .help(badge.accessibilityLabel)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(badge.accessibilityLabel)
+        }
     }
 
     private func navigationButton(
@@ -334,11 +367,12 @@ private struct RemoteWorkspaceRuntimeView: View {
 
     private var listingList: some View {
         List(selection: selectionBinding) {
-            ForEach(visibleRows) { row in
+            ForEach(workspace.visibleProjection.rows) { row in
                 listingRow(row)
             }
         }
         .listStyle(.sidebar)
+        .focused($isListingFocused)
         .contextMenu(forSelectionType: RemotePath.self) { selection in
             contextMenuItems(clicked: selection.first)
         } primaryAction: { selection in
@@ -350,35 +384,25 @@ private struct RemoteWorkspaceRuntimeView: View {
     }
 
     @ViewBuilder
-    private func listingRow(_ row: RemoteListingRow) -> some View {
+    private func listingRow(_ row: RemoteWorkspaceVisibleRow) -> some View {
         switch row.kind {
-        case let .entry(entry, depth, isExpanded, childState):
-            let entryRow = RemoteEntryRow(
+        case let .entry(entry, isExpanded, childState):
+            // Every visible loaded entry at any depth is a true selectable row;
+            // the workspace validates selection against the same projection.
+            RemoteEntryRow(
                 entry: entry,
-                depth: depth,
+                depth: row.depth,
                 isExpanded: isExpanded,
                 childState: childState,
                 toggleDisclosure: { expanded in
                     interaction.setExpanded(entry.path, isExpanded: expanded)
                 }
             )
-            if depth == 0 {
-                entryRow.tag(entry.path)
-            } else {
-                // Child rows stay outside the single current-listing selection.
-                // Double-click still opens child directories natively.
-                entryRow
-                    .contextMenu {
-                        contextMenuItems(clicked: entry.path)
-                    }
-                    .onTapGesture(count: 2) {
-                        interaction.openEntry(entry.path)
-                    }
-            }
-        case let .childStatus(path, state, depth, allowsRetry):
+            .tag(entry.path)
+        case let .childStatus(path, state, allowsRetry):
             RemoteEntryChildStatusRow(
                 state: state,
-                depth: depth,
+                depth: row.depth,
                 isRetryEnabled: allowsRetry && isChildRetryEnabled(state),
                 retry: { interaction.retryDirectory(path) }
             )
@@ -394,8 +418,8 @@ private struct RemoteWorkspaceRuntimeView: View {
 
     @ViewBuilder
     private func contextMenuItems(clicked: RemotePath?) -> some View {
-        let entry = clicked.flatMap(findVisibleEntry)
-        let target = entry?.path ?? clicked ?? workspace.currentDirectory
+        let entry = clicked.flatMap { workspace.visibleProjection.entry(for: $0) }
+        let target = entry?.path ?? workspace.currentDirectory
         let menuPolicy = performer.contextPolicy(for: entry)
         ForEach(RemoteWorkspaceCommandRoute.contextCopyActions, id: \.self) { action in
             let presentation = menuPolicy.presentation(for: action)
@@ -409,18 +433,6 @@ private struct RemoteWorkspaceRuntimeView: View {
         }
     }
 
-    private func findVisibleEntry(_ path: RemotePath) -> RemoteFileEntry? {
-        if let entry = workspace.currentListing?.entries.first(where: { $0.path == path }) {
-            return entry
-        }
-        for state in workspace.directoryStates.values {
-            if let entry = state.visibleListing?.entries.first(where: { $0.path == path }) {
-                return entry
-            }
-        }
-        return nil
-    }
-
     private func isChildRetryEnabled(_ state: RemoteDirectoryLoadState) -> Bool {
         RemoteWorkspaceActionPolicy(
             availability: workspace.availability,
@@ -432,112 +444,4 @@ private struct RemoteWorkspaceRuntimeView: View {
         ).isEnabled(.retryDirectory)
     }
 
-    // MARK: Row flattening
-
-    private struct RemoteListingRow: Identifiable {
-        enum Kind {
-            case entry(
-                RemoteFileEntry,
-                depth: Int,
-                isExpanded: Bool,
-                childState: RemoteDirectoryLoadState?
-            )
-            case childStatus(
-                RemotePath,
-                RemoteDirectoryLoadState,
-                depth: Int,
-                allowsRetry: Bool
-            )
-        }
-
-        enum ID: Hashable {
-            case entry(RemotePath)
-            case childStatus(RemotePath)
-        }
-
-        let id: ID
-        let kind: Kind
-    }
-
-    /// Flattens the current listing plus already-loaded expanded children into
-    /// display rows. Only cached immediate children are walked — no provider work,
-    /// no recursion beyond the bounded expansion set.
-    private var visibleRows: [RemoteListingRow] {
-        guard let listing = workspace.currentListing else { return [] }
-        var rows: [RemoteListingRow] = []
-        appendRows(for: listing.entries, depth: 0, into: &rows)
-        return rows
-    }
-
-    private func appendRows(
-        for entries: [RemoteFileEntry],
-        depth: Int,
-        into rows: inout [RemoteListingRow]
-    ) {
-        guard depth <= RemoteWorkspace.maximumExpandedDirectoryCount else { return }
-        for entry in entries {
-            let isDirectory = entry.kind == .directory
-            let isExpanded = isDirectory
-                && workspace.expandedDirectories.contains(entry.path)
-            let childState = isDirectory ? workspace.directoryStates[entry.path] : nil
-            rows.append(
-                RemoteListingRow(
-                    id: .entry(entry.path),
-                    kind: .entry(
-                        entry,
-                        depth: depth,
-                        isExpanded: isExpanded,
-                        childState: childState
-                    )
-                )
-            )
-            guard isExpanded else {
-                // A collapsed directory whose last load failed or was cancelled
-                // still displays that outcome honestly beneath its row
-                // (FILE-NAV-002); retry there is re-opening or re-expanding.
-                if let childState, isFailedOrCancelledState(childState) {
-                    rows.append(
-                        RemoteListingRow(
-                            id: .childStatus(entry.path),
-                            kind: .childStatus(
-                                entry.path,
-                                childState,
-                                depth: depth + 1,
-                                allowsRetry: false
-                            )
-                        )
-                    )
-                }
-                continue
-            }
-            if let children = childState?.visibleListing?.entries, !children.isEmpty {
-                appendRows(for: children, depth: depth + 1, into: &rows)
-            }
-            if let childState, !isLoadedState(childState) {
-                rows.append(
-                    RemoteListingRow(
-                        id: .childStatus(entry.path),
-                        kind: .childStatus(
-                            entry.path,
-                            childState,
-                            depth: depth + 1,
-                            allowsRetry: true
-                        )
-                    )
-                )
-            }
-        }
-    }
-
-    private func isLoadedState(_ state: RemoteDirectoryLoadState) -> Bool {
-        if case .loaded = state { return true }
-        return false
-    }
-
-    private func isFailedOrCancelledState(_ state: RemoteDirectoryLoadState) -> Bool {
-        switch state {
-        case .failed, .cancelled: true
-        case .notLoaded, .loading, .loaded, .empty: false
-        }
-    }
 }

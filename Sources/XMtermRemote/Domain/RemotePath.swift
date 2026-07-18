@@ -120,6 +120,17 @@ public struct RemotePath: Hashable, Sendable {
         try Self(components: storedComponents + [component])
     }
 
+    /// True when `other` lies strictly below this path, compared by exact raw
+    /// components. A path is never its own ancestor, and `/a` is not an
+    /// ancestor of `/ab`.
+    public func isAncestor(of other: Self) -> Bool {
+        let ownComponents = storedComponents
+        let otherComponents = other.storedComponents
+        guard otherComponents.count > ownComponents.count else { return false }
+        return otherComponents.prefix(ownComponents.count)
+            .elementsEqual(ownComponents)
+    }
+
     private init(validatedComponents: ArraySlice<RemotePathComponent>) {
         storedComponents = validatedComponents
     }

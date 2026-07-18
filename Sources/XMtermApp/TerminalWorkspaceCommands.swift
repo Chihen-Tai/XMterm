@@ -160,19 +160,24 @@ struct RemoteWorkspaceCommandRoute {
     }
 
     func isEnabled(_ action: RemoteWorkspaceAction) -> Bool {
-        guard let actions, actions.isOwnerCurrent else { return false }
+        guard let actions,
+              actions.hasWorkspaceFocus,
+              actions.isOwnerCurrent else { return false }
         return actions.policy.isEnabled(action)
     }
 
     @discardableResult
     func perform(_ action: RemoteWorkspaceAction) -> Bool {
-        actions?.perform(action) ?? false
+        guard let actions, actions.hasWorkspaceFocus else { return false }
+        return actions.perform(action)
     }
 
     func presentation(
         for action: RemoteWorkspaceAction
     ) -> RemoteWorkspaceActionPresentation {
-        guard let actions, actions.isOwnerCurrent else {
+        guard let actions,
+              actions.hasWorkspaceFocus,
+              actions.isOwnerCurrent else {
             return Self.disabledPolicy.presentation(for: action)
         }
         return actions.policy.presentation(for: action)
@@ -193,7 +198,7 @@ struct RemoteWorkspaceActionPerformer {
 
     var selectedListingEntry: RemoteFileEntry? {
         guard let selected = workspace.selectedEntry else { return nil }
-        return workspace.currentListing?.entries.first { $0.path == selected }
+        return workspace.visibleProjection.entry(for: selected)
     }
 
     func currentPolicy() -> RemoteWorkspaceActionPolicy {
@@ -235,7 +240,8 @@ struct RemoteWorkspaceActionPerformer {
             workspace.retryDirectory(target)
         case .copyPath, .copyName, .copyParentDirectory, .copyShellQuotedPath:
             guard let copyAction = action.copyAction,
-                  let target = workspace.selectedEntry ?? workspace.currentDirectory else {
+                  let target = selectedListingEntry?.path ?? workspace.currentDirectory
+            else {
                 return
             }
             pasteboard.copy(copyAction, from: target)
@@ -278,6 +284,7 @@ extension RemoteWorkspaceFocusedActions {
         runtimeID: TerminalSessionID,
         workspace: RemoteWorkspace,
         pasteboard: RemotePathPasteboard,
+        isWorkspaceFocused: @escaping @MainActor () -> Bool,
         currentOwner: @escaping @MainActor () -> RemoteWorkspaceFocusOwner?
     ) -> RemoteWorkspaceFocusedActions {
         let performer = RemoteWorkspaceActionPerformer(
@@ -290,6 +297,7 @@ extension RemoteWorkspaceFocusedActions {
                 workspaceID: workspace.id
             ),
             policy: performer.currentPolicy(),
+            isWorkspaceFocused: isWorkspaceFocused,
             currentOwner: currentOwner,
             perform: performer.perform
         )

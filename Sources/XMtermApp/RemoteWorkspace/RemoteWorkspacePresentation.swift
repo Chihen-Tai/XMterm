@@ -17,6 +17,15 @@ struct RemoteWorkspaceStatusPresentation: Equatable, Sendable {
     }
 }
 
+/// Trusted developer-badge copy shown whenever the workspace's composition-
+/// assigned provider mode is the simulated fixture. Derived from
+/// `RemoteProviderMode` only — never from provider text or paths.
+struct RemoteWorkspaceBadgePresentation: Equatable, Sendable {
+    let title: String
+    let detail: String
+    let accessibilityLabel: String
+}
+
 struct RemoteEntryMetadataPresentation: Equatable, Sendable {
     let kindText: String
     let sizeText: String?
@@ -64,6 +73,22 @@ enum RemoteWorkspacePresentation {
             )
         case .closed:
             RemoteWorkspaceStatusPresentation(title: "Remote Workspace closed")
+        }
+    }
+
+    static func simulatedBadge(
+        for mode: RemoteProviderMode
+    ) -> RemoteWorkspaceBadgePresentation? {
+        switch mode {
+        case .production, .unavailable:
+            nil
+        case .simulatedDeveloperFixture:
+            RemoteWorkspaceBadgePresentation(
+                title: "SIMULATED",
+                detail: "Developer fixture — not a real remote host",
+                accessibilityLabel:
+                    "Simulated developer fixture. This listing is not a real remote host."
+            )
         }
     }
 
