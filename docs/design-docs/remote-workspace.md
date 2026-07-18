@@ -1,6 +1,6 @@
 # Remote Workspace Foundation
 
-- **Status:** Approved for the Phase 4A foundation; production transport blocked
+- **Status:** Approved, implemented, and production verified for Phase 4A
 - **Owner:** XMterm
 - **Date:** 2026-07-16
 - **Decision scope:** Session ownership, read-only remote-file domain, provider

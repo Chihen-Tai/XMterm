@@ -154,6 +154,131 @@ struct OpenSSHSFTPRemoteFileProviderTests {
         #expect(await channel.invalidationCount() == 1)
         #expect(await channel.recordedWrites().map { $0[4] } == [1, 11, 12])
     }
+
+    @Test("[FILE-XFER-002, FILE-XFER-004] production streams preserve short reads, EOF, exact flags, and double close")
+    func productionStreamsAndExclusiveOpen() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(
+                2,
+                sftpU32(3),
+                sftpString(Array("posix-rename@openssh.com".utf8)),
+                sftpString(Array("1".utf8))
+            ),
+            sftpPacket(102, sftpU32(1), sftpString([0x10])),
+            sftpPacket(103, sftpU32(2), sftpString([1, 2])),
+            sftpPacket(101, sftpU32(3), sftpU32(1), sftpString([]), sftpString([])),
+            providerOK(4),
+            sftpPacket(102, sftpU32(5), sftpString([0x20])),
+            providerOK(6),
+            providerOK(7)
+        ])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(
+                factory: ScriptedSFTPChannelFactory(channels: [channel])
+            )
+        )
+        let path = try RemotePath(rawBytes: Array("/raw-file".utf8))
+
+        let reader = try await provider.openFileForReading(path)
+        #expect((await provider.capabilities).supportsAtomicReplace)
+        #expect(try await reader.read(maximumBytes: 65_536) == Data([1, 2]))
+        #expect(try await reader.read(maximumBytes: 65_536) == nil)
+        try await reader.close()
+        try await reader.close()
+
+        let writer = try await provider.openFileForWriting(path)
+        try await writer.write(Data([3]))
+        try await writer.close()
+        try await writer.close()
+
+        let writes = await channel.recordedWrites()
+        let expectedReadOpen = try SFTPBinaryCodec().encodeOpenRequest(
+            id: 1,
+            rawPath: path.rawBytes,
+            flags: [.read]
+        )
+        let expectedExclusiveOpen = try SFTPBinaryCodec().encodeOpenRequest(
+            id: 5,
+            rawPath: path.rawBytes,
+            flags: [.write, .create, .exclusive]
+        )
+        #expect(writes.map { $0[4] } == [1, 3, 5, 5, 4, 3, 6, 4])
+        #expect(writes[1] == expectedReadOpen)
+        #expect(writes[5] == expectedExclusiveOpen)
+    }
+
+    @Test("[SESS-004, SESS-006] provider close invalidates outstanding file-handle identity without reconnecting")
+    func closeInvalidatesOutstandingFileHandle() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(2, sftpU32(3)),
+            sftpPacket(102, sftpU32(1), sftpString([0x10]))
+        ])
+        let factory = ScriptedSFTPChannelFactory(channels: [channel])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(factory: factory)
+        )
+        let reader = try await provider.openFileForReading(
+            try RemotePath(rawBytes: Array("/file".utf8))
+        )
+
+        await provider.close()
+
+        await #expect(throws: RemoteFileError(category: .transportUnavailable)) {
+            try await reader.read(maximumBytes: 1)
+        }
+        try await reader.close()
+        #expect(await factory.makeCount() == 1)
+        #expect(await channel.closeCount() == 1)
+    }
+
+    @Test("[SESS-004, FILE-XFER-002] cancelling a provider reaps an idle stream handle and later close does not reconnect")
+    func cancelAllSettlesIdleStreamHandle() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(2, sftpU32(3)),
+            sftpPacket(102, sftpU32(1), sftpString([0x10]))
+        ])
+        let factory = ScriptedSFTPChannelFactory(channels: [channel])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(factory: factory)
+        )
+        let reader = try await provider.openFileForReading(
+            try RemotePath(rawBytes: Array("/file".utf8))
+        )
+
+        await provider.cancelAll()
+        try await reader.close()
+        try await reader.close()
+
+        #expect(await factory.makeCount() == 1)
+        #expect(await channel.invalidationCount() == 1)
+    }
+
+    @Test("[SESS-004, FILE-XFER-002] a stream status failure settles its still-valid remote handle exactly once")
+    func streamStatusFailureSettlesRemoteHandle() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(2, sftpU32(3)),
+            sftpPacket(102, sftpU32(1), sftpString([0x10])),
+            sftpPacket(101, sftpU32(2), sftpU32(3), sftpString([]), sftpString([])),
+            providerOK(3)
+        ])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(
+                factory: ScriptedSFTPChannelFactory(channels: [channel])
+            )
+        )
+        let reader = try await provider.openFileForReading(
+            try RemotePath(rawBytes: Array("/file".utf8))
+        )
+
+        await #expect(throws: RemoteFileError(category: .permissionDenied)) {
+            try await reader.read(maximumBytes: 1)
+        }
+        try await reader.close()
+        try await reader.close()
+
+        #expect(await channel.recordedWrites().map { $0[4] } == [1, 3, 5, 4])
+        #expect(await channel.invalidationCount() == 0)
+    }
 }
 
 private func providerNameRecord(
@@ -171,4 +296,8 @@ private func providerNameRecord(
     if let permissions { values += sftpU32(permissions) }
     if let mtime { values += sftpU32(mtime) + sftpU32(mtime) }
     return values
+}
+
+private func providerOK(_ id: UInt32) -> [UInt8] {
+    sftpPacket(101, sftpU32(id), sftpU32(0), sftpString([]), sftpString([]))
 }

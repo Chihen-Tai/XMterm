@@ -33,7 +33,7 @@ coordination, and remote files remain deferred. `SESS-001` through `SESS-006`,
 `TAB-002` through `TAB-005`, and `TERM-STATE-001` therefore remain partial against
 their broader canonical scope.
 
-## Implementation status note — Phase 4A foundation implemented; transport blocked
+## Implementation status note — Phase 4A complete; Phase 4B designed
 
 The Phase 4A Remote Workspace Foundation implements `SESS-011`,
 `FILE-WORKSPACE-001`, `FILE-NAV-002`, `FILE-CACHE-001`, `FILE-STATE-001`, and
@@ -45,17 +45,17 @@ Sessions, focused menu/context commands with exact-owner guards, and exact
 plain-text path copy actions. Local runtimes own no provider, cache, or remote
 task. `FILE-SEL-001`, `FILE-NAV-001`, `FILE-OPS-001`, and `FILE-LIST-001` remain
 Partial: only their single-selection/read-only subsets are implemented. Mutation,
-transfer, multi/range selection, remote-object clipboard, drag-and-drop, file
-opening, terminal-directory following, and editor sync remain deferred to later
-phases.
+transfer, multi/range selection, remote-object clipboard, and drag-and-drop are the
+locked Phase 4B scope and remain unimplemented at this design checkpoint. File
+opening/editor sync and terminal-directory following remain later phases.
 
 The stock macOS `/usr/bin/sftp` client exposes only human-formatted directory
 listings and cannot safely preserve every legal remote filename. Human `ls` parsing
-and a custom SFTP implementation are prohibited. ADR 0007 therefore blocks the
-production provider while the session architecture, provider seam, deterministic
-provider, state machine, and mock-backed UI proceed. A simulated listing must never
-be presented as Relay Host evidence, and Phase 4A cannot be marked complete until
-the structured production transport and real manual acceptance pass.
+remains prohibited. ADR 0007 accepted a narrowly bounded read-only SFTP v3 codec
+over a system OpenSSH subsystem process; production and real Relay acceptance
+passed. ADR 0008 now governs the separately reviewed Phase 4B mutation and transfer
+extension. Simulated data remains debug-only and may never be presented as Relay
+Host evidence.
 
 ## Implementation status note — Phase 2 tab-strip polish
 

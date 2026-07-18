@@ -5,6 +5,7 @@ struct SFTPBinaryCodec: Sendable {
         case version = 2
         case status = 101
         case handle = 102
+        case data = 103
         case name = 104
         case attributes = 105
     }
@@ -34,7 +35,8 @@ struct SFTPBinaryCodec: Sendable {
         id: UInt32,
         rawPath: [UInt8]
     ) throws -> [UInt8] {
-        guard type == .realPath || type == .openDirectory else {
+        guard type == .realPath || type == .openDirectory || type == .lstat
+                || type == .remove || type == .removeDirectory else {
             throw SFTPProtocolError.invalidRequestType(type.rawValue)
         }
         guard rawPath.count <= limits.maximumPathByteCount else {
@@ -46,6 +48,107 @@ struct SFTPBinaryCodec: Sendable {
         return try boundedFrame(
             type: type.rawValue,
             body: encode(id) + encodeString(rawPath)
+        )
+    }
+
+    func encodeOpenRequest(
+        id: UInt32,
+        rawPath: [UInt8],
+        flags: SFTPOpenFlags
+    ) throws -> [UInt8] {
+        try validatePath(rawPath)
+        try validateOpenFlags(flags)
+        return try boundedFrame(
+            type: SFTPRequestType.open.rawValue,
+            body: encode(id) + encodeString(rawPath) + encode(flags.rawValue)
+                + encodeAttributes(.empty)
+        )
+    }
+
+    func encodeReadRequest(
+        id: UInt32,
+        handle: [UInt8],
+        offset: UInt64,
+        length: Int
+    ) throws -> [UInt8] {
+        try validateHandle(handle)
+        try validateChunkByteCount(length, allowEmpty: false)
+        guard let wireLength = UInt32(exactly: length) else {
+            throw SFTPProtocolError.invalidIntegerConversion
+        }
+        return try boundedFrame(
+            type: SFTPRequestType.read.rawValue,
+            body: encode(id) + encodeString(handle) + encode(offset) + encode(wireLength)
+        )
+    }
+
+    func encodeWriteRequest(
+        id: UInt32,
+        handle: [UInt8],
+        offset: UInt64,
+        data: [UInt8]
+    ) throws -> [UInt8] {
+        try validateHandle(handle)
+        try validateChunkByteCount(data.count, allowEmpty: true)
+        return try boundedFrame(
+            type: SFTPRequestType.write.rawValue,
+            body: encode(id) + encodeString(handle) + encode(offset) + encodeString(data)
+        )
+    }
+
+    func encodeSetStatRequest(
+        id: UInt32,
+        rawPath: [UInt8],
+        attributes: SFTPAttributes
+    ) throws -> [UInt8] {
+        try validatePath(rawPath)
+        guard attributes.size == nil,
+              attributes.userID == nil,
+              attributes.groupID == nil,
+              attributes.accessTime == nil,
+              attributes.modificationTime == nil,
+              attributes.permissions != nil else {
+            throw SFTPProtocolError.unsupportedOutboundAttributes
+        }
+        return try boundedFrame(
+            type: SFTPRequestType.setstat.rawValue,
+            body: encode(id) + encodeString(rawPath) + encodeAttributes(attributes)
+        )
+    }
+
+    func encodeMakeDirectoryRequest(id: UInt32, rawPath: [UInt8]) throws -> [UInt8] {
+        try validatePath(rawPath)
+        return try boundedFrame(
+            type: SFTPRequestType.makeDirectory.rawValue,
+            body: encode(id) + encodeString(rawPath) + encodeAttributes(.empty)
+        )
+    }
+
+    func encodeRenameRequest(
+        id: UInt32,
+        source: [UInt8],
+        destination: [UInt8]
+    ) throws -> [UInt8] {
+        try validatePath(source)
+        try validatePath(destination)
+        return try boundedFrame(
+            type: SFTPRequestType.rename.rawValue,
+            body: encode(id) + encodeString(source) + encodeString(destination)
+        )
+    }
+
+    func encodePosixRenameRequest(
+        id: UInt32,
+        source: [UInt8],
+        destination: [UInt8]
+    ) throws -> [UInt8] {
+        try validatePath(source)
+        try validatePath(destination)
+        let name = Array("posix-rename@openssh.com".utf8)
+        return try boundedFrame(
+            type: SFTPRequestType.extended.rawValue,
+            body: encode(id) + encodeString(name) + encodeString(source)
+                + encodeString(destination)
         )
     }
 
@@ -118,6 +221,8 @@ struct SFTPBinaryCodec: Sendable {
             result = try decodeStatus(from: reader, expectedRequestID: expectedRequestID)
         case .handle:
             result = try decodeHandle(from: reader, expectedRequestID: expectedRequestID)
+        case .data:
+            result = try decodeData(from: reader, expectedRequestID: expectedRequestID)
         case .name:
             result = try decodeNames(from: reader, expectedRequestID: expectedRequestID)
         case .attributes:
@@ -241,6 +346,23 @@ struct SFTPBinaryCodec: Sendable {
             nextReader = attributesResult.reader
         }
         return (.names(id: idResult.id, values: values), nextReader)
+    }
+
+    private func decodeData(
+        from reader: SFTPByteReader,
+        expectedRequestID: UInt32?
+    ) throws -> (SFTPResponse, SFTPByteReader) {
+        let idResult = try readAndValidateID(from: reader, expected: expectedRequestID)
+        let dataResult = try idResult.reader.readString(
+            maximumByteCount: limits.maximumTransferChunkByteCount,
+            tooLong: { actual in
+                .invalidChunkByteCount(
+                    maximum: limits.maximumTransferChunkByteCount,
+                    actual: actual
+                )
+            }
+        )
+        return (.data(id: idResult.id, value: dataResult.value), dataResult.reader)
     }
 
     private func decodeAttributesResponse(
@@ -378,6 +500,72 @@ struct SFTPBinaryCodec: Sendable {
         return result
     }
 
+    private func validatePath(_ rawPath: [UInt8]) throws {
+        guard rawPath.count <= limits.maximumPathByteCount else {
+            throw SFTPProtocolError.pathTooLong(
+                maximum: limits.maximumPathByteCount,
+                actual: rawPath.count
+            )
+        }
+    }
+
+    private func validateHandle(_ handle: [UInt8]) throws {
+        guard handle.count <= limits.maximumHandleByteCount else {
+            throw SFTPProtocolError.handleTooLong(
+                maximum: limits.maximumHandleByteCount,
+                actual: handle.count
+            )
+        }
+    }
+
+    private func validateChunkByteCount(_ count: Int, allowEmpty: Bool) throws {
+        guard count <= limits.maximumTransferChunkByteCount,
+              allowEmpty || count > 0 else {
+            throw SFTPProtocolError.invalidChunkByteCount(
+                maximum: limits.maximumTransferChunkByteCount,
+                actual: count
+            )
+        }
+    }
+
+    private func validateOpenFlags(_ flags: SFTPOpenFlags) throws {
+        let unsupported = flags.rawValue & ~SFTPOpenFlags.supportedMask
+        guard unsupported == 0 else {
+            throw SFTPProtocolError.unsupportedOpenFlags(unsupported)
+        }
+        let hasAccess = flags.contains(.read) || flags.contains(.write)
+        let writeRequired = flags.intersection([.append, .create, .truncate, .exclusive])
+        guard hasAccess,
+              writeRequired.isEmpty || flags.contains(.write),
+              !flags.contains(.exclusive) || flags.contains(.create) else {
+            throw SFTPProtocolError.invalidOpenFlagCombination(flags.rawValue)
+        }
+    }
+
+    private func encodeAttributes(_ attributes: SFTPAttributes) -> [UInt8] {
+        var flags: UInt32 = 0
+        if attributes.size != nil { flags |= AttributeFlag.size }
+        if attributes.userID != nil || attributes.groupID != nil {
+            flags |= AttributeFlag.userAndGroup
+        }
+        if attributes.permissions != nil { flags |= AttributeFlag.permissions }
+        if attributes.accessTime != nil || attributes.modificationTime != nil {
+            flags |= AttributeFlag.accessAndModificationTime
+        }
+
+        var result = encode(flags)
+        if let size = attributes.size { result += encode(size) }
+        if let userID = attributes.userID, let groupID = attributes.groupID {
+            result += encode(userID) + encode(groupID)
+        }
+        if let permissions = attributes.permissions { result += encode(permissions) }
+        if let accessTime = attributes.accessTime,
+           let modificationTime = attributes.modificationTime {
+            result += encode(accessTime) + encode(modificationTime)
+        }
+        return result
+    }
+
     private func framed(type: UInt8, body: [UInt8]) -> [UInt8] {
         let payload = [type] + body
         return encode(UInt32(payload.count)) + payload
@@ -389,6 +577,19 @@ struct SFTPBinaryCodec: Sendable {
 
     private func encode(_ value: UInt32) -> [UInt8] {
         [
+            UInt8(truncatingIfNeeded: value >> 24),
+            UInt8(truncatingIfNeeded: value >> 16),
+            UInt8(truncatingIfNeeded: value >> 8),
+            UInt8(truncatingIfNeeded: value)
+        ]
+    }
+
+    private func encode(_ value: UInt64) -> [UInt8] {
+        [
+            UInt8(truncatingIfNeeded: value >> 56),
+            UInt8(truncatingIfNeeded: value >> 48),
+            UInt8(truncatingIfNeeded: value >> 40),
+            UInt8(truncatingIfNeeded: value >> 32),
             UInt8(truncatingIfNeeded: value >> 24),
             UInt8(truncatingIfNeeded: value >> 16),
             UInt8(truncatingIfNeeded: value >> 8),

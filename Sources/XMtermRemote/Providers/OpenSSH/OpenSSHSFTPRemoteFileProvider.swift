@@ -16,10 +16,21 @@ struct OpenSSHSFTPProviderLimits: Equatable, Sendable {
     }
 }
 
-public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider {
+public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider, RemoteFileTransferProvider {
     private let client: OpenSSHSFTPClient
     private let limits: OpenSSHSFTPProviderLimits
     private var isClosed = false
+
+    public var capabilities: RemoteFileCapabilities {
+        get async {
+            RemoteFileCapabilities(
+                canList: true,
+                canMutate: true,
+                canTransfer: true,
+                supportsAtomicReplace: await client.supportsPosixRename
+            )
+        }
+    }
 
     public init(profile: SSHSessionProfile) throws {
         let target = try OpenSSHSFTPTarget(profile: profile)
@@ -97,6 +108,120 @@ public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider {
 
     public func cancelAll() async {
         await client.invalidate()
+    }
+
+    public func lstat(_ path: RemotePath) async throws -> RemoteFileAttributes {
+        try ensureOpen()
+        do {
+            return Self.makeAttributes(from: try await client.lstat(path.rawBytes))
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func createFile(_ path: RemotePath) async throws {
+        try ensureOpen()
+        do {
+            let handle = try await client.openFile(
+                path.rawBytes,
+                flags: [.write, .create, .exclusive]
+            )
+            try await client.closeFile(handle)
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func createDirectory(_ path: RemotePath) async throws {
+        try ensureOpen()
+        do {
+            try await client.createDirectory(path.rawBytes)
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func rename(
+        _ source: RemotePath,
+        to destination: RemotePath,
+        replace: Bool
+    ) async throws {
+        try ensureOpen()
+        do {
+            if replace {
+                guard try await client.serverSupportsPosixRename() else {
+                    throw OpenSSHSFTPFailure.unsupportedProtocol
+                }
+                try await client.posixRename(source.rawBytes, to: destination.rawBytes)
+            } else {
+                try await client.rename(source.rawBytes, to: destination.rawBytes)
+            }
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func removeFile(_ path: RemotePath) async throws {
+        try ensureOpen()
+        do {
+            try await client.removeFile(path.rawBytes)
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func removeDirectory(_ path: RemotePath) async throws {
+        try ensureOpen()
+        do {
+            try await client.removeDirectory(path.rawBytes)
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func setPermissions(_ permissions: UInt32, at path: RemotePath) async throws {
+        try ensureOpen()
+        guard permissions <= UInt32(RemoteFileEntry.maximumPermissionBits) else {
+            throw RemoteFileError(category: .invalidOperation)
+        }
+        do {
+            try await client.setStat(
+                path.rawBytes,
+                attributes: SFTPAttributes(permissions: permissions)
+            )
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func openFileForReading(
+        _ path: RemotePath
+    ) async throws -> any RemoteReadableFile {
+        try ensureOpen()
+        do {
+            let handle = try await client.openFile(path.rawBytes, flags: [.read])
+            return OpenSSHSFTPReadableFile(client: client, handle: handle)
+        } catch {
+            throw await mappedError(error)
+        }
+    }
+
+    public func openFileForWriting(
+        _ path: RemotePath
+    ) async throws -> any RemoteWritableFile {
+        try ensureOpen()
+        do {
+            let handle = try await client.openFile(
+                path.rawBytes,
+                flags: [.write, .create, .exclusive]
+            )
+            return OpenSSHSFTPWritableFile(
+                client: client,
+                handle: handle
+            )
+        } catch {
+            throw await mappedError(error)
+        }
     }
 
     public func close() async {
@@ -188,6 +313,19 @@ public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider {
         }
     }
 
+    private static func makeAttributes(from attributes: SFTPAttributes) -> RemoteFileAttributes {
+        RemoteFileAttributes(
+            kind: kind(from: attributes.permissions),
+            size: attributes.size,
+            permissions: attributes.permissions.map {
+                $0 & UInt32(RemoteFileEntry.maximumPermissionBits)
+            },
+            modificationDate: attributes.modificationTime.map {
+                Date(timeIntervalSince1970: TimeInterval($0))
+            }
+        )
+    }
+
     private static func isDotEntry(_ bytes: [UInt8]) -> Bool {
         bytes == [0x2E] || bytes == [0x2E, 0x2E]
     }
@@ -213,5 +351,127 @@ public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider {
             return RemoteFileError(category: .malformedResponse)
         }
         return RemoteFileError(category: .unknown)
+    }
+}
+
+private actor OpenSSHSFTPReadableFile: RemoteReadableFile {
+    private let client: OpenSSHSFTPClient
+    private let handle: SFTPFileHandle
+    private var offset: UInt64 = 0
+    private var isClosed = false
+    private var operationFailed = false
+
+    init(client: OpenSSHSFTPClient, handle: SFTPFileHandle) {
+        self.client = client
+        self.handle = handle
+    }
+
+    func read(maximumBytes: Int) async throws -> Data? {
+        guard !isClosed else { throw RemoteFileError(category: .invalidOperation) }
+        guard maximumBytes > 0,
+              maximumBytes <= RemoteFileTransferLimits.maximumChunkByteCount else {
+            throw RemoteFileError(category: .limitExceeded)
+        }
+        do {
+            guard let bytes = try await client.readFile(
+                handle,
+                offset: offset,
+                length: maximumBytes
+            ) else {
+                return nil
+            }
+            let advanced = offset.addingReportingOverflow(UInt64(bytes.count))
+            guard !advanced.overflow else {
+                operationFailed = true
+                await client.invalidate()
+                throw RemoteFileError(category: .limitExceeded)
+            }
+            offset = advanced.partialValue
+            return Data(bytes)
+        } catch let error as RemoteFileError {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw error
+        } catch let failure as OpenSSHSFTPFailure {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw failure.remoteFileError
+        } catch {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw RemoteFileError(category: .unknown)
+        }
+    }
+
+    func close() async throws {
+        guard !isClosed else { return }
+        isClosed = true
+        guard !operationFailed else { return }
+        do {
+            try await client.closeFile(handle)
+        } catch let failure as OpenSSHSFTPFailure {
+            if failure == .transportUnavailable { return }
+            throw failure.remoteFileError
+        } catch {
+            throw RemoteFileError(category: .unknown)
+        }
+    }
+}
+
+private actor OpenSSHSFTPWritableFile: RemoteWritableFile {
+    private let client: OpenSSHSFTPClient
+    private let handle: SFTPFileHandle
+    private var offset: UInt64
+    private var isClosed = false
+    private var operationFailed = false
+
+    init(client: OpenSSHSFTPClient, handle: SFTPFileHandle) {
+        self.client = client
+        self.handle = handle
+        offset = 0
+    }
+
+    func write(_ data: Data) async throws {
+        guard !isClosed else { throw RemoteFileError(category: .invalidOperation) }
+        guard data.count <= RemoteFileTransferLimits.maximumChunkByteCount else {
+            throw RemoteFileError(category: .limitExceeded)
+        }
+        guard !data.isEmpty else { return }
+        do {
+            try await client.writeFile(handle, offset: offset, data: Array(data))
+            let advanced = offset.addingReportingOverflow(UInt64(data.count))
+            guard !advanced.overflow else {
+                operationFailed = true
+                await client.invalidate()
+                throw RemoteFileError(category: .limitExceeded)
+            }
+            offset = advanced.partialValue
+        } catch let error as RemoteFileError {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw error
+        } catch let failure as OpenSSHSFTPFailure {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw failure.remoteFileError
+        } catch {
+            operationFailed = true
+            await client.settleFileHandleAfterFailure(handle)
+            throw RemoteFileError(category: .unknown)
+        }
+    }
+
+    func close() async throws {
+        guard !isClosed else { return }
+        isClosed = true
+        guard !operationFailed else { return }
+        do {
+            try await client.closeFile(handle)
+        } catch let failure as OpenSSHSFTPFailure {
+            if failure == .transportUnavailable { return }
+            throw failure.remoteFileError
+        } catch {
+            throw RemoteFileError(category: .unknown)
+        }
     }
 }

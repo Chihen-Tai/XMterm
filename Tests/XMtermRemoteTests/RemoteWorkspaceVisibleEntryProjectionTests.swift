@@ -29,6 +29,15 @@ struct RemoteWorkspaceVisibleEntryProjectionTests {
             .entry(fixture.workReadme)
         ])
         #expect(projection.rows.map(\.depth) == [0, 1, 2, 2, 1, 0, 1, 0])
+        #expect(projection.orderedSelectablePaths == [
+            fixture.alpha,
+            fixture.inner,
+            fixture.deep,
+            fixture.lossyDeep,
+            fixture.alphaReadme,
+            fixture.beta,
+            fixture.workReadme
+        ])
 
         guard case let .childStatus(path, state, allowsRetry) =
             projection.rows[6].kind else {

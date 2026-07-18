@@ -221,6 +221,26 @@ struct RemoteWorkspaceDescendantSelectionTests {
         #expect(workspace.selectedEntry == fixture.deep)
     }
 
+    @Test("[FILE-NAV-002, FILE-SEL-001] history restores the complete ordered selection state")
+    func historyRestoresCompleteSelectionState() async throws {
+        let fixture = try makeGraphFixture()
+        let workspace = RemoteWorkspace(provider: fixture.makeProvider())
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        try await expandLoaded(workspace, fixture.alpha)
+
+        workspace.clickEntry(fixture.alpha, command: false, shift: false)
+        workspace.clickEntry(fixture.beta, command: true, shift: false)
+        workspace.openDirectory(fixture.beta)
+        try await waitUntil { workspace.currentDirectory == fixture.beta }
+
+        workspace.goBack()
+        try await waitUntil { workspace.currentDirectory == fixture.work }
+        #expect(workspace.selection.orderedPaths == [fixture.alpha, fixture.beta])
+        #expect(workspace.selection.anchor == fixture.beta)
+        #expect(workspace.selection.focusedPath == fixture.beta)
+    }
+
     @Test("[FILE-NAV-002] history clears an exact descendant absent after cache eviction and reload")
     func historyClearsExactDescendantAbsentAfterCacheEvictionAndReload() async throws {
         let fixture = try makeGraphFixture()
@@ -287,6 +307,47 @@ struct RemoteWorkspaceDescendantSelectionTests {
 
         first.selectEntry(nil)
         #expect(second.selectedEntry == fixture.beta)
+    }
+
+    @Test("[SESS-011, FILE-SEL-001] workspaces isolate multi-selection anchors and focus")
+    func independentWorkspaceSelectionState() async throws {
+        let fixture = try makeGraphFixture()
+        let first = RemoteWorkspace(provider: fixture.makeProvider())
+        let second = RemoteWorkspace(provider: fixture.makeProvider())
+        first.start()
+        second.start()
+        try await waitUntil {
+            first.availability == .available && second.availability == .available
+        }
+
+        first.clickEntry(fixture.alpha, command: false, shift: false)
+        first.clickEntry(fixture.beta, command: true, shift: false)
+        second.clickEntry(fixture.beta, command: false, shift: false)
+
+        #expect(first.selection.orderedPaths == [fixture.alpha, fixture.beta])
+        #expect(first.selection.anchor == fixture.beta)
+        #expect(first.selection.focusedPath == fixture.beta)
+        #expect(second.selection.orderedPaths == [fixture.beta])
+        #expect(second.selection.anchor == fixture.beta)
+        #expect(second.selection.focusedPath == fixture.beta)
+    }
+
+    @Test("[FILE-SEL-001] workspace selection gestures do not request provider I/O")
+    func workspaceSelectionGesturesDoNotRequestProviderIO() async throws {
+        let fixture = try makeGraphFixture()
+        let provider = fixture.makeProvider()
+        let workspace = RemoteWorkspace(provider: provider)
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        let attemptCount = await provider.recordedAttempts.count
+
+        workspace.clickEntry(fixture.alpha, command: false, shift: false)
+        workspace.clickEntry(fixture.beta, command: true, shift: false)
+        workspace.moveSelectionFocus(by: -1, extending: true)
+        workspace.selectAllVisibleEntries()
+        workspace.clearSelection()
+
+        #expect(await provider.recordedAttempts.count == attemptCount)
     }
 
     @Test("[FILE-SEL-001, FILE-STATE-001] hidden child completion after ancestor collapse cannot reselect or render descendant")

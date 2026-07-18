@@ -97,6 +97,60 @@ struct OpenSSHSubsystemProcessTests {
         #expect(await channel.processIdentifierForTesting == nil)
     }
 
+    @Test("[FILE-OPS-001, FILE-XFER-002, FILE-XFER-004] local sftp-server performs bounded mutation and streaming round trips")
+    func localServerMutationAndTransferRoundTrip() async throws {
+        let serverPath = "/usr/libexec/sftp-server"
+        guard FileManager.default.isExecutableFile(atPath: serverPath) else { return }
+
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("xmterm-sftp-write-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let channel = FoundationSFTPProcessChannel(
+            launch: .init(
+                executablePath: serverPath,
+                arguments: [],
+                currentDirectoryURL: fixture
+            ),
+            timeouts: .init(request: .seconds(5), settlement: .seconds(2))
+        )
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(factory: StaticSFTPProcessChannelFactory(channel: channel))
+        )
+        let root = try await provider.resolveInitialDirectory()
+        let folder = try root.appending(RemotePathComponent(rawBytes: Array("folder".utf8)))
+        let file = try folder.appending(RemotePathComponent(rawBytes: Array("payload.bin".utf8)))
+        let renamed = try folder.appending(RemotePathComponent(rawBytes: Array("renamed.bin".utf8)))
+
+        try await provider.createDirectory(folder)
+        let writer = try await provider.openFileForWriting(file)
+        try await writer.write(Data(repeating: 0x41, count: 65_536))
+        try await writer.write(Data([0x42, 0x43]))
+        try await writer.close()
+        try await provider.setPermissions(0o640, at: file)
+
+        let attributes = try await provider.lstat(file)
+        #expect(attributes.kind == .regular)
+        #expect(attributes.size == 65_538)
+        #expect(attributes.permissions == 0o640)
+
+        let reader = try await provider.openFileForReading(file)
+        #expect(try await reader.read(maximumBytes: 65_536)?.count == 65_536)
+        #expect(try await reader.read(maximumBytes: 65_536) == Data([0x42, 0x43]))
+        #expect(try await reader.read(maximumBytes: 65_536) == nil)
+        try await reader.close()
+
+        #expect((await provider.capabilities).supportsAtomicReplace)
+        try await provider.rename(file, to: renamed, replace: false)
+        try await provider.removeFile(renamed)
+        try await provider.removeDirectory(folder)
+        #expect(try await provider.listDirectory(root).entries.isEmpty)
+
+        await provider.close()
+        #expect(!(await channel.isRunningForTesting))
+    }
+
     @Test("[FILE-STATE-001] cancelled local read tears down and reaps the process")
     func cancellationReapsProcess() async throws {
         let serverPath = "/usr/libexec/sftp-server"

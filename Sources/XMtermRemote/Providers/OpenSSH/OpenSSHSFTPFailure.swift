@@ -10,6 +10,7 @@ enum OpenSSHSFTPFailure: Error, Equatable, Sendable {
     case malformedResponse
     case transportUnavailable
     case limitExceeded
+    case providerFailure
     case unknown
 
     var remoteFileError: RemoteFileError {
@@ -29,6 +30,7 @@ enum OpenSSHSFTPFailure: Error, Equatable, Sendable {
         case .malformedResponse: .malformedResponse
         case .transportUnavailable: .transportUnavailable
         case .limitExceeded: .limitExceeded
+        case .providerFailure: .providerFailure
         case .unknown: .unknown
         }
     }

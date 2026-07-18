@@ -8,6 +8,9 @@ public struct RemoteFileError: Error, Equatable, Sendable {
         case permissionDenied
         case pathNotFound
         case notDirectory
+        case alreadyExists
+        case directoryNotEmpty
+        case invalidOperation
         case disconnected
         case connectionRefused
         case timeout
@@ -29,6 +32,9 @@ public struct RemoteFileError: Error, Equatable, Sendable {
             case .permissionDenied: "Permission was denied."
             case .pathNotFound: "The remote path was not found."
             case .notDirectory: "The remote path is not a directory."
+            case .alreadyExists: "An entry already exists at the destination."
+            case .directoryNotEmpty: "The remote directory is not empty."
+            case .invalidOperation: "The remote operation is not valid for this entry."
             case .disconnected: "The remote connection was disconnected."
             case .connectionRefused: "The remote connection was refused."
             case .timeout: "The remote operation timed out."

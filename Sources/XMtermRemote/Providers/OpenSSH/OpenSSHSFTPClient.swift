@@ -3,12 +3,23 @@ enum SFTPDirectoryReadResult: Equatable, Sendable {
     case endOfDirectory(packetByteCount: Int)
 }
 
+struct SFTPFileHandle: Equatable, Sendable {
+    let bytes: [UInt8]
+    let connectionGeneration: UInt64
+}
+
 actor OpenSSHSFTPClient {
     private let factory: any SFTPProcessChannelFactory
     private let codec: SFTPBinaryCodec
     private var channel: (any SFTPProcessChannel)?
     private var nextRequestID: UInt32 = 1
+    private var connectionGeneration: UInt64 = 0
+    private var advertisedPosixRename = false
     private var isClosed = false
+
+    var supportsPosixRename: Bool {
+        advertisedPosixRename
+    }
 
     init(
         factory: any SFTPProcessChannelFactory,
@@ -30,7 +41,7 @@ actor OpenSSHSFTPClient {
             }
             return values[0].rawFilename
         case .status(_, let code, _, _):
-            throw mapStatus(code)
+            throw await mappedStatusFailure(code)
         default:
             await invalidateCurrentChannel()
             throw OpenSSHSFTPFailure.malformedResponse
@@ -45,7 +56,7 @@ actor OpenSSHSFTPClient {
         case .handle(_, let value):
             return value
         case .status(_, let code, _, _):
-            throw mapStatus(code)
+            throw await mappedStatusFailure(code)
         default:
             await invalidateCurrentChannel()
             throw OpenSSHSFTPFailure.malformedResponse
@@ -62,7 +73,7 @@ actor OpenSSHSFTPClient {
         case .status(_, .endOfFile, _, _):
             return .endOfDirectory(packetByteCount: response.packetByteCount)
         case .status(_, let code, _, _):
-            throw mapStatus(code)
+            throw await mappedStatusFailure(code)
         default:
             await invalidateCurrentChannel()
             throw OpenSSHSFTPFailure.malformedResponse
@@ -77,11 +88,165 @@ actor OpenSSHSFTPClient {
         case .status(_, .ok, _, _):
             return
         case .status(_, let code, _, _):
-            throw mapStatus(code)
+            throw await mappedStatusFailure(code)
         default:
             await invalidateCurrentChannel()
             throw OpenSSHSFTPFailure.malformedResponse
         }
+    }
+
+    func openFile(_ rawPath: [UInt8], flags: SFTPOpenFlags) async throws -> SFTPFileHandle {
+        let response = try await request { id in
+            try codec.encodeOpenRequest(id: id, rawPath: rawPath, flags: flags)
+        }
+        switch response.value {
+        case .handle(_, let value):
+            return SFTPFileHandle(
+                bytes: value,
+                connectionGeneration: response.connectionGeneration
+            )
+        case .status(_, let code, _, _):
+            throw await mappedStatusFailure(code)
+        default:
+            await invalidateCurrentChannel()
+            throw OpenSSHSFTPFailure.malformedResponse
+        }
+    }
+
+    func readFile(
+        _ handle: SFTPFileHandle,
+        offset: UInt64,
+        length: Int
+    ) async throws -> [UInt8]? {
+        let response = try await request(requiredGeneration: handle.connectionGeneration) { id in
+            try codec.encodeReadRequest(
+                id: id,
+                handle: handle.bytes,
+                offset: offset,
+                length: length
+            )
+        }
+        switch response.value {
+        case .data(_, let value):
+            guard !value.isEmpty else {
+                await invalidateCurrentChannel()
+                throw OpenSSHSFTPFailure.malformedResponse
+            }
+            return value
+        case .status(_, .endOfFile, _, _):
+            return nil
+        case .status(_, let code, _, _):
+            throw await mappedStatusFailure(code)
+        default:
+            await invalidateCurrentChannel()
+            throw OpenSSHSFTPFailure.malformedResponse
+        }
+    }
+
+    func writeFile(
+        _ handle: SFTPFileHandle,
+        offset: UInt64,
+        data: [UInt8]
+    ) async throws {
+        guard !data.isEmpty else { return }
+        let response = try await request(requiredGeneration: handle.connectionGeneration) { id in
+            try codec.encodeWriteRequest(
+                id: id,
+                handle: handle.bytes,
+                offset: offset,
+                data: data
+            )
+        }
+        try await acceptOK(response.value)
+    }
+
+    func closeFile(_ handle: SFTPFileHandle) async throws {
+        let response = try await request(requiredGeneration: handle.connectionGeneration) { id in
+            try codec.encodeHandleRequest(type: .close, id: id, handle: handle.bytes)
+        }
+        try await acceptOK(response.value)
+    }
+
+    /// Settles a handle after a stream operation has already failed. A handle
+    /// from the current synchronized channel receives one structured CLOSE;
+    /// otherwise no new channel is opened. Any uncertainty while closing is
+    /// fatal to the current channel.
+    func settleFileHandleAfterFailure(_ handle: SFTPFileHandle) async {
+        guard !isClosed,
+              channel != nil,
+              handle.connectionGeneration == connectionGeneration else {
+            return
+        }
+        do {
+            try await closeFile(handle)
+        } catch {
+            await invalidateCurrentChannel()
+        }
+    }
+
+    func lstat(_ rawPath: [UInt8]) async throws -> SFTPAttributes {
+        let response = try await request { id in
+            try codec.encodePathRequest(type: .lstat, id: id, rawPath: rawPath)
+        }
+        switch response.value {
+        case .attributes(_, let value):
+            return value
+        case .status(_, let code, _, _):
+            throw await mappedStatusFailure(code)
+        default:
+            await invalidateCurrentChannel()
+            throw OpenSSHSFTPFailure.malformedResponse
+        }
+    }
+
+    func setStat(_ rawPath: [UInt8], attributes: SFTPAttributes) async throws {
+        let response = try await request { id in
+            try codec.encodeSetStatRequest(id: id, rawPath: rawPath, attributes: attributes)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func removeFile(_ rawPath: [UInt8]) async throws {
+        let response = try await request { id in
+            try codec.encodePathRequest(type: .remove, id: id, rawPath: rawPath)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func createDirectory(_ rawPath: [UInt8]) async throws {
+        let response = try await request { id in
+            try codec.encodeMakeDirectoryRequest(id: id, rawPath: rawPath)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func removeDirectory(_ rawPath: [UInt8]) async throws {
+        let response = try await request { id in
+            try codec.encodePathRequest(type: .removeDirectory, id: id, rawPath: rawPath)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func rename(_ source: [UInt8], to destination: [UInt8]) async throws {
+        let response = try await request { id in
+            try codec.encodeRenameRequest(id: id, source: source, destination: destination)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func posixRename(_ source: [UInt8], to destination: [UInt8]) async throws {
+        guard try await serverSupportsPosixRename() else {
+            throw OpenSSHSFTPFailure.unsupportedProtocol
+        }
+        let response = try await request { id in
+            try codec.encodePosixRenameRequest(id: id, source: source, destination: destination)
+        }
+        try await acceptOK(response.value)
+    }
+
+    func serverSupportsPosixRename() async throws -> Bool {
+        _ = try await connectedChannel()
+        return advertisedPosixRename
     }
 
     func invalidate() async {
@@ -93,12 +258,19 @@ actor OpenSSHSFTPClient {
         isClosed = true
         let current = channel
         channel = nil
+        advertisedPosixRename = false
+        connectionGeneration &+= 1
         await current?.close()
     }
 
     private func request(
+        requiredGeneration: UInt64? = nil,
         encodedBy encodeRequest: (UInt32) throws -> [UInt8]
-    ) async throws -> (value: SFTPResponse, packetByteCount: Int) {
+    ) async throws -> (
+        value: SFTPResponse,
+        packetByteCount: Int,
+        connectionGeneration: UInt64
+    ) {
         guard !isClosed else {
             throw OpenSSHSFTPFailure.transportUnavailable
         }
@@ -108,7 +280,16 @@ actor OpenSSHSFTPClient {
             throw OpenSSHSFTPFailure.cancelled
         }
 
-        let activeChannel = try await connectedChannel()
+        let activeChannel: any SFTPProcessChannel
+        if let requiredGeneration {
+            guard channel != nil, requiredGeneration == connectionGeneration else {
+                throw OpenSSHSFTPFailure.transportUnavailable
+            }
+            activeChannel = try await connectedChannel()
+        } else {
+            activeChannel = try await connectedChannel()
+        }
+        let requestGeneration = connectionGeneration
         let requestID = nextRequestID
         nextRequestID = requestID == UInt32.max ? 1 : requestID + 1
         let packet: [UInt8]
@@ -121,6 +302,12 @@ actor OpenSSHSFTPClient {
         }
 
         do {
+            try Task.checkCancellation()
+        } catch {
+            throw OpenSSHSFTPFailure.cancelled
+        }
+
+        do {
             try await activeChannel.write(packet)
             let responseBytes = try await activeChannel.readPacket(
                 maximumByteCount: codec.limits.maximumPacketByteCount
@@ -129,7 +316,10 @@ actor OpenSSHSFTPClient {
                 responseBytes,
                 expectedRequestID: requestID
             )
-            return (response, responseBytes.count)
+            guard !isClosed, requestGeneration == connectionGeneration else {
+                throw OpenSSHSFTPFailure.transportUnavailable
+            }
+            return (response, responseBytes.count, requestGeneration)
         } catch is CancellationError {
             await invalidateCurrentChannel()
             throw OpenSSHSFTPFailure.cancelled
@@ -167,7 +357,8 @@ actor OpenSSHSFTPClient {
             let versionBytes = try await candidate.readPacket(
                 maximumByteCount: codec.limits.maximumPacketByteCount
             )
-            _ = try codec.decodeFramedResponse(versionBytes, expectedRequestID: nil)
+            let version = try codec.decodeFramedResponse(versionBytes, expectedRequestID: nil)
+            advertisedPosixRename = version.advertisesPosixRename
         } catch is CancellationError {
             await candidate.invalidate()
             throw OpenSSHSFTPFailure.cancelled
@@ -184,6 +375,7 @@ actor OpenSSHSFTPClient {
             await candidate.invalidate()
             throw OpenSSHSFTPFailure.transportUnavailable
         }
+        connectionGeneration &+= 1
         channel = candidate
         return candidate
     }
@@ -191,7 +383,21 @@ actor OpenSSHSFTPClient {
     private func invalidateCurrentChannel() async {
         let current = channel
         channel = nil
+        advertisedPosixRename = false
+        connectionGeneration &+= 1
         await current?.invalidate()
+    }
+
+    private func acceptOK(_ response: SFTPResponse) async throws {
+        switch response {
+        case .status(_, .ok, _, _):
+            return
+        case .status(_, let code, _, _):
+            throw await mappedStatusFailure(code)
+        default:
+            await invalidateCurrentChannel()
+            throw OpenSSHSFTPFailure.malformedResponse
+        }
     }
 
     private func mapStatus(_ code: SFTPStatusCode) -> OpenSSHSFTPFailure {
@@ -201,14 +407,25 @@ actor OpenSSHSFTPClient {
         case .badMessage: .malformedResponse
         case .noConnection, .connectionLost: .transportUnavailable
         case .operationUnsupported: .unsupportedProtocol
-        case .ok, .endOfFile, .failure, .unknown: .unknown
+        case .failure, .unknown: .providerFailure
+        case .ok, .endOfFile: .unknown
         }
+    }
+
+    private func mappedStatusFailure(_ code: SFTPStatusCode) async -> OpenSSHSFTPFailure {
+        switch code {
+        case .badMessage, .noConnection, .connectionLost:
+            await invalidateCurrentChannel()
+        default:
+            break
+        }
+        return mapStatus(code)
     }
 
     private func mapProtocolError(_ error: SFTPProtocolError) -> OpenSSHSFTPFailure {
         switch error {
         case .packetTooLarge, .stringTooLong, .pathTooLong, .handleTooLong,
-             .tooManyNames, .tooManyExtensions:
+             .tooManyNames, .tooManyExtensions, .invalidChunkByteCount:
             .limitExceeded
         case .unsupportedVersion:
             .unsupportedProtocol

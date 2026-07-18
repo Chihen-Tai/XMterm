@@ -6,7 +6,7 @@ struct RemoteWorkspaceNavigationPlan {
 
 enum RemoteWorkspaceRequestPurpose {
   case navigation(RemoteWorkspaceNavigationPlan)
-  case refresh(selectedEntry: RemotePath?)
+  case refresh(selection: RemoteSelectionState)
   case expansion
 }
 

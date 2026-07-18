@@ -169,7 +169,13 @@ packaged debug/release gates passed.
 
 Exact recommended next task: **Phase 4B — Remote File Mutations and Transfers.**
 
-## Then — Phase 4B — Remote File Mutations and Transfers
+## In progress — Phase 4B — Remote File Mutations and Transfers
+
+Design, transport ADR, execution plan, and acceptance checklist are locked in:
+[`docs/design-docs/phase-4b-remote-file-mutations-and-transfers.md`](docs/design-docs/phase-4b-remote-file-mutations-and-transfers.md),
+[`docs/decisions/0008-remote-file-mutation-and-transfer-transport.md`](docs/decisions/0008-remote-file-mutation-and-transfer-transport.md),
+[`docs/exec-plans/0010-phase-4b-remote-file-mutations-and-transfers.md`](docs/exec-plans/0010-phase-4b-remote-file-mutations-and-transfers.md), and
+[`docs/checklists/remote-file-mutations-and-transfers-acceptance.md`](docs/checklists/remote-file-mutations-and-transfers-acceptance.md).
 
 - [ ] Implement stable multi/range selection and batch actions.
 - [ ] Implement Copy, Cut, Paste, Move, Rename, Duplicate, Delete, New File/Folder

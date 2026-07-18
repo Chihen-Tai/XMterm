@@ -49,6 +49,10 @@ public struct RemoteWorkspaceVisibleEntryProjection: Sendable {
     public static let maximumDepth = RemoteWorkspace.maximumExpandedDirectoryCount
 
     public let rows: [RemoteWorkspaceVisibleRow]
+    /// The stable order of every selectable row. This is the only ordering used
+    /// by range selection and batch selection; `selectablePaths` is retained for
+    /// membership checks.
+    public let orderedSelectablePaths: [RemotePath]
     public let selectablePaths: Set<RemotePath>
 
     private let entriesByPath: [RemotePath: RemoteFileEntry]
@@ -72,7 +76,11 @@ public struct RemoteWorkspaceVisibleEntryProjection: Sendable {
         }
         self.rows = rows
         self.entriesByPath = entriesByPath
-        selectablePaths = Set(entriesByPath.keys)
+        orderedSelectablePaths = rows.compactMap { row in
+            guard case let .entry(entry, _, _) = row.kind else { return nil }
+            return entry.path
+        }
+        selectablePaths = Set(orderedSelectablePaths)
     }
 
     public func entry(for path: RemotePath) -> RemoteFileEntry? {

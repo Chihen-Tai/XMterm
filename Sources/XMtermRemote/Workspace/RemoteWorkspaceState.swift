@@ -18,8 +18,23 @@ public struct RemoteScrollRestorationToken: RawRepresentable, Hashable, Sendable
 
 public struct RemoteWorkspaceLocation: Equatable, Sendable {
     public let directory: RemotePath
-    public let selectedEntry: RemotePath?
+    public let selection: RemoteSelectionState
+    /// Temporary Phase 4A compatibility projection. Selection itself is the sole
+    /// mutable source of truth in `RemoteWorkspace`.
+    public var selectedEntry: RemotePath? {
+        selection.orderedPaths.count == 1 ? selection.orderedPaths.first : nil
+    }
     public let scrollRestorationToken: RemoteScrollRestorationToken?
+
+    public init(
+        directory: RemotePath,
+        selection: RemoteSelectionState,
+        scrollRestorationToken: RemoteScrollRestorationToken?
+    ) {
+        self.directory = directory
+        self.selection = selection
+        self.scrollRestorationToken = scrollRestorationToken
+    }
 
     public init(
         directory: RemotePath,
@@ -27,7 +42,10 @@ public struct RemoteWorkspaceLocation: Equatable, Sendable {
         scrollRestorationToken: RemoteScrollRestorationToken?
     ) {
         self.directory = directory
-        self.selectedEntry = selectedEntry
+        self.selection = selectedEntry.map {
+            RemoteSelectionState()
+                .clicking($0, command: false, shift: false, visiblePaths: [$0])
+        } ?? RemoteSelectionState()
         self.scrollRestorationToken = scrollRestorationToken
     }
 }

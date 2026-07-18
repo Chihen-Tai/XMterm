@@ -76,8 +76,8 @@ struct SFTPBinaryCodecTests {
 
     @Test("[FILE-XFER-004] response type and request ID must match the serialized request")
     func validatesResponseTypeAndRequestID() throws {
-        #expect(throws: SFTPProtocolError.unexpectedPacketType(103)) {
-            try codec.decodeFramedResponse(bytes(103, u32(9)), expectedRequestID: 9)
+        #expect(throws: SFTPProtocolError.unexpectedPacketType(106)) {
+            try codec.decodeFramedResponse(bytes(106, u32(9)), expectedRequestID: 9)
         }
         #expect(throws: SFTPProtocolError.requestIDMismatch(expected: 9, actual: 10)) {
             try codec.decodeFramedResponse(
@@ -266,6 +266,205 @@ struct SFTPBinaryCodecTests {
         }
         #expect(throws: SFTPProtocolError.invalidRequestType(16)) {
             try limited.encodeHandleRequest(type: .realPath, id: 1, handle: [1])
+        }
+    }
+
+    @Test("[FILE-OPS-001, FILE-XFER-004] mutation requests use exact SFTP v3 framing")
+    func encodesMutationRequests() throws {
+        let source = Array("/raw/\u{00FF}".utf8)
+        let destination = Array("/raw/destination".utf8)
+
+        #expect(
+            try codec.encodePathRequest(type: .lstat, id: 50, rawPath: source)
+                == bytes(7, u32(50), string(source))
+        )
+        #expect(
+            try codec.encodeSetStatRequest(
+                id: 51,
+                rawPath: source,
+                attributes: .init(permissions: 0o751)
+            ) == bytes(9, u32(51), string(source), attrs(flags: 0x04, permissions: 0o751))
+        )
+        #expect(
+            try codec.encodePathRequest(type: .remove, id: 52, rawPath: source)
+                == bytes(13, u32(52), string(source))
+        )
+        #expect(
+            try codec.encodeMakeDirectoryRequest(id: 53, rawPath: source)
+                == bytes(14, u32(53), string(source), attrs(flags: 0))
+        )
+        #expect(
+            try codec.encodePathRequest(type: .removeDirectory, id: 54, rawPath: source)
+                == bytes(15, u32(54), string(source))
+        )
+        #expect(
+            try codec.encodeRenameRequest(id: 55, source: source, destination: destination)
+                == bytes(18, u32(55), string(source), string(destination))
+        )
+        #expect(
+            try codec.encodePosixRenameRequest(id: 56, source: source, destination: destination)
+                == bytes(
+                    200,
+                    u32(56),
+                    string(Array("posix-rename@openssh.com".utf8)),
+                    string(source),
+                    string(destination)
+                )
+        )
+    }
+
+    @Test("[FILE-XFER-002, FILE-XFER-004] OPEN, READ, WRITE use exact flags, offsets, and bounded chunks")
+    func encodesStreamingRequests() throws {
+        let path = Array("/data".utf8)
+        let handle: [UInt8] = [0x00, 0xFF]
+        let flags: SFTPOpenFlags = [.write, .create, .truncate, .exclusive]
+
+        #expect(
+            try codec.encodeOpenRequest(id: 60, rawPath: path, flags: flags)
+                == bytes(3, u32(60), string(path), u32(0x3A), attrs(flags: 0))
+        )
+        #expect(
+            try codec.encodeReadRequest(id: 61, handle: handle, offset: 0x1_0000_0001, length: 65_536)
+                == bytes(5, u32(61), string(handle), u64(0x1_0000_0001), u32(65_536))
+        )
+        #expect(
+            try codec.encodeWriteRequest(id: 62, handle: handle, offset: 7, data: [1, 2, 3])
+                == bytes(6, u32(62), string(handle), u64(7), string([1, 2, 3]))
+        )
+
+        #expect(throws: SFTPProtocolError.invalidChunkByteCount(maximum: 65_536, actual: 0)) {
+            try codec.encodeReadRequest(id: 1, handle: handle, offset: 0, length: 0)
+        }
+        #expect(throws: SFTPProtocolError.invalidChunkByteCount(maximum: 65_536, actual: 65_537)) {
+            try codec.encodeReadRequest(id: 1, handle: handle, offset: 0, length: 65_537)
+        }
+        #expect(throws: SFTPProtocolError.invalidChunkByteCount(maximum: 65_536, actual: 65_537)) {
+            try codec.encodeWriteRequest(
+                id: 1,
+                handle: handle,
+                offset: 0,
+                data: Array(repeating: 0, count: 65_537)
+            )
+        }
+        #expect(throws: SFTPProtocolError.unsupportedOpenFlags(0x40)) {
+            try codec.encodeOpenRequest(
+                id: 1,
+                rawPath: path,
+                flags: SFTPOpenFlags(rawValue: 0x40)
+            )
+        }
+        #expect(throws: SFTPProtocolError.invalidOpenFlagCombination(0x22)) {
+            try codec.encodeOpenRequest(
+                id: 1,
+                rawPath: path,
+                flags: [.write, .exclusive]
+            )
+        }
+        #expect(throws: SFTPProtocolError.invalidOpenFlagCombination(0x09)) {
+            try codec.encodeOpenRequest(
+                id: 1,
+                rawPath: path,
+                flags: [.read, .create]
+            )
+        }
+        #expect(throws: SFTPProtocolError.unsupportedOutboundAttributes) {
+            try codec.encodeSetStatRequest(
+                id: 1,
+                rawPath: path,
+                attributes: .init(size: 4)
+            )
+        }
+    }
+
+    @Test("[FILE-XFER-002, FILE-XFER-004] DATA is binary-safe, bounded, ID-checked, and exact")
+    func decodesBoundedData() throws {
+        let payload: [UInt8] = [0, 0xFF, 0x0A]
+        #expect(
+            try codec.decodeFramedResponse(
+                bytes(103, u32(70), string(payload)),
+                expectedRequestID: 70
+            ) == .data(id: 70, value: payload)
+        )
+
+        let limited = SFTPBinaryCodec(limits: .init(maximumTransferChunkByteCount: 2))
+        #expect(throws: SFTPProtocolError.invalidChunkByteCount(maximum: 2, actual: 3)) {
+            try limited.decodeFramedResponse(
+                bytes(103, u32(70), string(payload)),
+                expectedRequestID: 70
+            )
+        }
+        #expect(throws: SFTPProtocolError.trailingPayloadBytes(1)) {
+            try codec.decodeFramedResponse(
+                bytes(103, u32(70), string(payload), [0]),
+                expectedRequestID: 70
+            )
+        }
+        #expect(throws: SFTPProtocolError.truncatedValue(expected: 3, remaining: 2)) {
+            try codec.decodeFramedResponse(
+                bytes(103, u32(70), u32(3), [1, 2]),
+                expectedRequestID: 70
+            )
+        }
+    }
+
+    @Test("[FILE-XFER-004] only an exact OpenSSH posix-rename advertisement enables atomic replace")
+    func detectsPosixRenameAdvertisementExactly() throws {
+        let accepted = try codec.decodeFramedResponse(
+            bytes(
+                2,
+                u32(3),
+                string(Array("posix-rename@openssh.com".utf8)),
+                string(Array("1".utf8))
+            ),
+            expectedRequestID: nil
+        )
+        let wrongVersion = try codec.decodeFramedResponse(
+            bytes(
+                2,
+                u32(3),
+                string(Array("posix-rename@openssh.com".utf8)),
+                string(Array("2".utf8))
+            ),
+            expectedRequestID: nil
+        )
+        let wrongName = try codec.decodeFramedResponse(
+            bytes(
+                2,
+                u32(3),
+                string(Array("POSIX-RENAME@OPENSSH.COM".utf8)),
+                string(Array("1".utf8))
+            ),
+            expectedRequestID: nil
+        )
+
+        #expect(accepted.advertisesPosixRename)
+        #expect(!wrongVersion.advertisesPosixRename)
+        #expect(!wrongName.advertisesPosixRename)
+    }
+
+    @Test("[FILE-XFER-004] typed posix rename validates both paths with no generic extension emitter")
+    func typedPosixRenameBoundsBothPaths() {
+        let tooLong = Array(
+            repeating: UInt8(0x61),
+            count: RemotePath.maximumRawByteCount + 1
+        )
+        let valid = Array("/valid".utf8)
+
+        #expect(
+            throws: SFTPProtocolError.pathTooLong(
+                maximum: RemotePath.maximumRawByteCount,
+                actual: tooLong.count
+            )
+        ) {
+            try codec.encodePosixRenameRequest(id: 1, source: tooLong, destination: valid)
+        }
+        #expect(
+            throws: SFTPProtocolError.pathTooLong(
+                maximum: RemotePath.maximumRawByteCount,
+                actual: tooLong.count
+            )
+        ) {
+            try codec.encodePosixRenameRequest(id: 1, source: valid, destination: tooLong)
         }
     }
 }
