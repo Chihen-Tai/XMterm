@@ -49,18 +49,18 @@ scrollback and close immediately. Exact automated and packaged-app acceptance
 results, retained limitations, and the final audit are recorded in
 [`docs/audits/0005-phase-3-session-manager-evidence.md`](docs/audits/0005-phase-3-session-manager-evidence.md).
 
-**Phase 4A Remote Workspace Foundation is PARTIAL.** Each launched SSH tab owns a
+**Phase 4A Remote Workspace Foundation is COMPLETE.** Each launched SSH tab owns a
 session-centric runtime with a read-only Remote Workspace sidebar: provider-
 resolved navigation, Back/Forward/Parent/breadcrumbs/Refresh, single selection,
 lazy disclosure, honest per-state presentation, and exact plain-text path copy
-actions, all bounded and cancellable. The stock `/usr/bin/sftp` client offers no
-structured listing, so ADR 0007 blocks the production transport; the shipping app
-honestly reports `Remote file transport unavailable` rather than a fake listing.
+actions, all bounded and cancellable. The accepted ADR 0007 transport uses an
+independent system-OpenSSH subsystem process plus a bounded read-only SFTP v3
+codec; real Relay listing and lifecycle acceptance passed.
 A deterministic simulated fixture is available only behind the explicit
 `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` environment value and is always
 labeled simulated. Automatic alias discovery/import, `ssh -G` presentation,
-tab-rename UI, reconnect, ProxyJump UI, automatic second hops, the production
-SFTP transport, remote file mutation/transfers, editor sync, tunnels, tmux,
+tab-rename UI, reconnect, ProxyJump UI, automatic second hops, remote file
+mutation/transfers, editor sync, tunnels, tmux,
 settings, Developer ID signing, and notarization remain deferred or blocked.
 
 ## Open the project

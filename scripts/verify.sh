@@ -28,6 +28,7 @@ required_files=(
   docs/design-docs/remote-files-ux.md
   docs/design-docs/editor-sync-ux.md
   docs/design-docs/remote-workspace.md
+  docs/design-docs/production-sftp-transport.md
   docs/checklists/interaction-parity.md
   docs/checklists/terminal-acceptance.md
   docs/checklists/ssh-terminal-acceptance.md
@@ -52,6 +53,7 @@ required_files=(
   docs/exec-plans/0006-phase-2-tab-strip-polish.md
   docs/exec-plans/0007-phase-3-native-session-manager.md
   docs/exec-plans/0008-phase-4a-remote-workspace-foundation.md
+  docs/exec-plans/0009-phase-4a-production-sftp-transport.md
 )
 
 for file in "${required_files[@]}"; do

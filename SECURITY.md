@@ -138,10 +138,18 @@ log-inspection evidence and known limitations are in
   never derived from display text; invalid or control bytes are escaped for
   display only. Nothing evaluates a remote name, builds a shell command from it,
   or follows a symlink during listing.
-- The shipping remote provider is `UnavailableRemoteFileProvider`; ADR 0007
-  prohibits parsing human `sftp`/`ls` output, implementing SFTP from scratch,
-  adding an SSH dependency silently, or weakening OpenSSH host-key validation.
-  No `StrictHostKeyChecking` override exists anywhere in the source.
+- The shipping remote provider is `OpenSSHSFTPRemoteFileProvider`. System OpenSSH
+  retains authentication, configuration, cryptography, and host-key authority;
+  XMterm implements only bounded binary SFTP v3 framing for read-only listing.
+  Human `sftp`/`ls` output is never parsed, no SSH dependency was added, and no
+  `StrictHostKeyChecking` override exists anywhere in the source.
+- Provider and presentation mode are bound by `RemoteProviderComposition`, whose
+  raw pairing is private. Public clients can construct only the unavailable
+  composition; package-only test providers carry the explicit `.packageTest`
+  mode, and the simulated mode accepts only the typed in-memory developer
+  provider. No arbitrary provider can claim production or simulated trust. ADR
+  0007 introduces the only production constructor, which accepts the concrete
+  reviewed OpenSSH provider.
 - Copy actions write exactly one plain-text pasteboard item, append no Return,
   and are disabled when the raw path has no lossless text representation.
   Clipboard contents, terminal contents, provider streams, and remote paths are
@@ -150,8 +158,16 @@ log-inspection evidence and known limitations are in
   20,000 cached entries, 10,000 entries and 32 MiB per response, 32 KiB paths,
   4 KiB components, two concurrent requests), and cancelled on close. There is
   no polling, recursive enumeration, prefetch, or per-row task creation.
+- The subsystem writer is readiness-driven and nonblocking, request and diagnostic
+  data are bounded, request-ID mismatch/desynchronization is fatal, and runtime
+  close uses bounded signal escalation plus retained process reaping.
+- Real Relay acceptance authenticated through public-key authentication using a
+  configured OpenSSH key. No agent identity or app-owned `ControlMaster` was in
+  use, and normal known-host policy succeeded without a bypass. No Keychain use is
+  claimed.
 - The simulated developer fixture activates only on the exact
   `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` environment value, contains only
-  synthetic `/simulated` data, labels every listing simulated, and fails closed
-  into the transport-unavailable state. It must never be described as a real
-  Relay Host listing.
+  synthetic `/simulated` data, and labels every listing simulated. Unrecognized
+  values fail closed. The environment gate is compile-time
+  disabled in release builds; an actual packaged release launch with the value
+  set retained the real production Relay listing and displayed no simulated badge.

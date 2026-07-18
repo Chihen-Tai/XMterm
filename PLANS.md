@@ -131,7 +131,7 @@ outside Phase 3. Automatic alias discovery/import, `ssh -G` presentation, reconn
 sleep/wake recovery, ProxyJump editing, automatic second hops, SFTP, remote files,
 editor sync, distribution signing, and notarization remain deferred.
 
-## Partial — Phase 4A — Remote Workspace Foundation
+## Complete — Phase 4A — Remote Workspace Foundation
 
 - [x] Lock the Phase 4A contract: `SESS-011`, `FILE-WORKSPACE-001`, `FILE-NAV-002`,
   `FILE-CACHE-001`, `FILE-STATE-001`, and `FILE-COPY-001` in `INTERACTIONS.md`,
@@ -158,20 +158,16 @@ editor sync, distribution signing, and notarization remain deferred.
 - [x] Pass the 1,000-entry model/order/publication performance gate (20.84 ms p90
   against the 100 ms budget) and the full repository verifier.
 - [x] Add the explicit env-gated simulated developer fixture for packaged
-  foundation verification; the shipping composition stays honestly
-  transport-unavailable.
-- [ ] **Blocked (ADR 0007 Proposed):** reviewed structured SFTP packet adapter over
-  system OpenSSH, production provider, and real Relay Host listing plus manual
-  acceptance. No human `ls` parsing, custom SFTP implementation, or silent
-  dependency is permitted.
+  foundation verification; release builds ignore it and retain production.
+- [x] Accept ADR 0007 and ship the reviewed system-OpenSSH subsystem transport,
+  bounded read-only SFTP v3 codec, concrete production provider, and real Relay
+  Host listing. No human `ls` parsing or external dependency was added.
 
-Status: **PARTIAL** — session-centric runtime, remote domain, provider boundary,
-state machine, cache, native simulated UI, navigation, copy actions, testing, and
-performance foundation implemented. Production structured SFTP transport and the
-real Relay Host listing remain blocked by ADR 0007.
+Status: **COMPLETE** — the foundation, production read-only transport, real Relay
+acceptance, lifecycle isolation, testing, performance, security review, and
+packaged debug/release gates passed.
 
-Exact recommended next task: **Complete Phase 4A production SFTP transport under
-ADR 0007.**
+Exact recommended next task: **Phase 4B — Remote File Mutations and Transfers.**
 
 ## Then — Phase 4B — Remote File Mutations and Transfers
 

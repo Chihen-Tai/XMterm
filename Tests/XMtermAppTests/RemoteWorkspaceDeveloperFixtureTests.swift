@@ -60,14 +60,21 @@ struct RemoteWorkspaceDeveloperFixtureTests {
         #expect(composition.mode == .unavailable)
     }
 
-    @Test("[FILE-STATE-001] the compile-time developer flag matches this test build configuration")
-    func compileTimeDeveloperFlagIsExplicit() {
-        // The test target builds in debug configuration; the release
-        // warnings-as-errors build compiles the false branch of the same
-        // compile-time boundary, so release composition cannot honor the
-        // environment value.
-        #expect(RemoteWorkspaceDeveloperFixture.isDeveloperBuild)
+    #if !DEBUG
+    @Test("[FILE-STATE-001] release build default composition fails closed with the exact environment value")
+    func releaseBuildDefaultCompositionCannotActivateSimulation() {
+        let environment = [
+            RemoteWorkspaceDeveloperFixture.environmentKey:
+                RemoteWorkspaceDeveloperFixture.simulatedValue
+        ]
+
+        let composition = RemoteWorkspaceDeveloperFixture.composition(
+            environment: environment
+        )
+        #expect(composition.provider is UnavailableRemoteFileProvider)
+        #expect(composition.mode == .unavailable)
     }
+    #endif
 
     @Test("[FILE-STATE-001] untrusted capability text cannot flip a workspace into simulated mode")
     @MainActor
@@ -83,7 +90,7 @@ struct RemoteWorkspaceDeveloperFixtureTests {
             ]
         )
         let workspace = RemoteWorkspace(provider: provider)
-        #expect(workspace.providerMode == .production)
+        #expect(workspace.providerMode == .packageTest)
 
         workspace.start()
         for _ in 0..<300 {
@@ -91,13 +98,51 @@ struct RemoteWorkspaceDeveloperFixtureTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(workspace.availability == .available)
-        #expect(workspace.providerMode == .production)
+        #expect(workspace.providerMode == .packageTest)
 
         let unavailableWorkspace = RemoteWorkspace(
-            provider: UnavailableRemoteFileProvider(),
-            providerMode: .unavailable
+            composition: .unavailable()
         )
         #expect(unavailableWorkspace.providerMode == .unavailable)
+    }
+
+    @Test("[FILE-STATE-001] package provider convenience init remains explicitly test-only")
+    @MainActor
+    func packageProviderConvenienceInitRemainsExplicitlyTestOnly() throws {
+        let work = try RemotePath(rawBytes: Array("/work".utf8))
+        let provider = InMemoryRemoteFileProvider(
+            initialDirectory: work,
+            directoryGraph: [work: .init(entries: [])]
+        )
+
+        let workspace = RemoteWorkspace(provider: provider)
+
+        #expect(workspace.providerMode == .packageTest)
+    }
+
+    @Test("[FILE-STATE-001] typed simulated developer fixture composition is simulated")
+    @MainActor
+    func typedSimulatedDeveloperFixtureCompositionIsSimulated() throws {
+        let provider = try RemoteWorkspaceDeveloperFixture.simulatedProvider()
+        let composition = RemoteProviderComposition.simulatedDeveloperFixture(provider)
+        #expect(composition.provider is InMemoryRemoteFileProvider)
+        #expect(composition.mode == .simulatedDeveloperFixture)
+
+        let workspace = RemoteWorkspace(composition: composition)
+
+        #expect(workspace.providerMode == .simulatedDeveloperFixture)
+    }
+
+    @Test("[FILE-STATE-001] typed unavailable composition is unavailable")
+    @MainActor
+    func typedUnavailableCompositionIsUnavailable() {
+        let composition = RemoteProviderComposition.unavailable()
+        #expect(composition.provider is UnavailableRemoteFileProvider)
+        #expect(composition.mode == .unavailable)
+
+        let workspace = RemoteWorkspace(composition: composition)
+
+        #expect(workspace.providerMode == .unavailable)
     }
 
     @Test("[FILE-STATE-001, FILE-PERF-001] the simulated graph is deterministic, labeled, and bounded")

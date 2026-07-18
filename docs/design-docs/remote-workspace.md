@@ -16,14 +16,11 @@ adds a real provider contract, deterministic in-memory implementation, bounded
 lazy navigation state, and native sidebar behavior without starting mutation,
 transfer, terminal-directory synchronization, or editor-sync work.
 
-The target remains a real Relay Host listing. Repository and system inspection
-found no safe production SFTP transport that can be completed inside the locked
-scope, however. The stock `/usr/bin/sftp` client exposes only human-formatted
-directory listings; parsing those listings cannot preserve newline, control, or
-non-UTF-8 names and is prohibited by the Phase 4A contract. No reviewed packet
-adapter is already present. Therefore the foundation proceeds, the shipping
-provider reports an honest transport-unavailable state, and Phase 4A remains
-partial until a separate transport decision is implemented and verified.
+The target is a real Relay Host listing. The stock `/usr/bin/sftp` client exposes
+only human-formatted directory listings, whose parsing remains prohibited. ADR
+0007 instead accepts a system-OpenSSH subsystem process plus a narrowly bounded,
+read-only binary SFTP v3 codec. That production provider is implemented and real
+Relay acceptance passed, so Phase 4A is complete.
 
 ## Acceptance requirements
 
@@ -201,9 +198,19 @@ Phase 4A includes:
 
 - `InMemoryRemoteFileProvider` for deterministic unit, state, UI, performance, and
   preview fixtures;
-- `UnavailableRemoteFileProvider` for the shipping composition until ADR 0007's
-  production gate is resolved. It returns a clear transport-unavailable error and
-  never claims a listing exists.
+- `UnavailableRemoteFileProvider` for unsupported/fail-closed compositions. It
+  returns a clear transport-unavailable error and never claims a listing exists;
+- `OpenSSHSFTPRemoteFileProvider` for supported production SSH runtimes under
+  Accepted ADR 0007.
+
+`RemoteProviderComposition` binds a provider to its trusted presentation mode.
+The raw initializer is private: public clients can create only the unavailable
+composition, package code can create a typed simulated composition only from
+`InMemoryRemoteFileProvider`, and ordinary package tests use the distinct
+`.packageTest` mode. There is no arbitrary production factory. ADR 0007 adds the
+production seam only for the concrete reviewed `OpenSSHSFTPRemoteFileProvider`.
+Release builds ignore the simulated fixture
+environment value and fail closed to unavailable.
 
 Views never launch processes or parse provider output.
 
@@ -273,6 +280,13 @@ and monotonic request generations.
 - Refresh reloads only the current directory, does not add history, retains a
   selected entry only when the same raw path still exists, and keeps the prior
   successful listing visible with an explicit refreshing state until replacement.
+- The rendered rows and selectable paths come from one
+  `RemoteWorkspaceVisibleEntryProjection`, bounded by the workspace's expansion
+  limit. Collapse repairs a selected hidden descendant to the collapsed directory;
+  cache eviction repairs to the nearest still-visible ancestor; refresh and
+  history restore only the exact raw path and never redirect by display name.
+  Selection validation and repair use cached immutable values only and perform no
+  provider I/O.
 - A newer generation always wins. Completion from a cancelled or superseded
   request is ignored.
 - Directory double-click and `Command-Down` open. `Command-Up` goes to the parent.
@@ -343,6 +357,9 @@ Phase 4A does not implement remote object Copy/Cut/Paste.
 
 - Model, order, and publish 1,000 deterministic entries in less than 100 ms on the
   verification host, measured separately from provider I/O and SwiftUI rendering.
+- Construct a 1,000-entry visible projection and perform 1,000 iterations of exact
+  hit/miss entry and selectability lookups in less than 100 ms p90, with fixture
+  construction outside the timed segment and one warm-up plus 11 measured runs.
 - No remote I/O, parsing, or per-entry task creation on `MainActor`.
 - No main-thread stall longer than 100 ms during scripted workspace interaction.
 - Cached tab switches publish immediately and do not restart provider work.

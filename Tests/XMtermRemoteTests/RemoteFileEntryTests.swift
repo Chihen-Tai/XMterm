@@ -217,6 +217,8 @@ struct RemoteFileEntryTests {
         #expect(
             RemoteFileError.Category.allCases == [
                 .authenticationRequired,
+                .hostKeyVerificationFailed,
+                .interactiveAuthenticationUnsupported,
                 .permissionDenied,
                 .pathNotFound,
                 .notDirectory,
@@ -225,6 +227,7 @@ struct RemoteFileEntryTests {
                 .timeout,
                 .cancelled,
                 .malformedResponse,
+                .unsupportedProtocol,
                 .unsupportedEntry,
                 .limitExceeded,
                 .transportUnavailable,

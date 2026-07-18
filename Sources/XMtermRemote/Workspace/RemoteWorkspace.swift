@@ -4,7 +4,7 @@ import Observation
 public final class RemoteWorkspace {
   public static let maximumConcurrentRequestCount = 2
   public static let maximumQueuedRequestCount = 64
-  public static let maximumExpandedDirectoryCount = 30
+  public nonisolated static let maximumExpandedDirectoryCount = 30
   public static let maximumDirectoryStateCount = 32
   public static let maximumHistoryLocationCount =
     RemoteWorkspaceHistoryPolicy.maximumLocationCount
@@ -50,15 +50,15 @@ public final class RemoteWorkspace {
   @ObservationIgnored private var directoryStateOrder: [RemotePath] = []
   public init(
     id: RemoteWorkspaceID = RemoteWorkspaceID(),
-    provider: any RemoteFileProvider,
-    providerMode: RemoteProviderMode = .production,
+    composition: RemoteProviderComposition,
     directoryCache: RemoteDirectoryCache = RemoteDirectoryCache()
   ) {
     self.id = id
-    self.provider = provider
-    self.providerMode = providerMode
+    self.provider = composition.provider
+    self.providerMode = composition.mode
     self.directoryCache = directoryCache
   }
+
   public func start() {
     guard availability == .idle || isFailed else { return }
     beginInitialLoad()

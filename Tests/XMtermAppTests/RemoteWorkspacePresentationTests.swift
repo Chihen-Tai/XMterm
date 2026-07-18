@@ -157,6 +157,7 @@ struct RemoteWorkspacePresentationTests {
     func simulatedBadgeComesOnlyFromTrustedProviderMode() {
         #expect(RemoteWorkspacePresentation.simulatedBadge(for: .production) == nil)
         #expect(RemoteWorkspacePresentation.simulatedBadge(for: .unavailable) == nil)
+        #expect(RemoteWorkspacePresentation.simulatedBadge(for: .packageTest) == nil)
 
         let badge = RemoteWorkspacePresentation.simulatedBadge(
             for: .simulatedDeveloperFixture

@@ -23,7 +23,9 @@ Phase 3 saved-session workflow evidence is in
 - [x] Local shell exit preserves final scrollback and disables input.
 - [ ] **Deferred:** reconnect starts a fresh process; no reconnect UI exists yet.
 - [x] Closing one local tab does not affect another tab.
-- [ ] **Out of scope:** independence from SFTP awaits SFTP implementation.
+- [x] The terminal PTY SSH and runtime-owned SFTP subsystem process are independent;
+  nested terminal SSH did not retarget the Relay workspace, and close reaped each
+  process through its own lifecycle.
 - [x] The shell PID and `forkpty` shell process-group ID are recorded separately
   from lifecycle state.
 - [x] A real-PTY test proves an idle interactive shell owns the foreground process
@@ -144,8 +146,9 @@ Phase 3 saved-session workflow evidence is in
   and `watch` were not all exercised.
 - [ ] **Partial:** interactive shell commands worked; a formal Python/secondary-REPL
   checklist was not recorded.
-- [ ] **Phase 2 manual follow-up:** nested `ssh g207` behavior is supported as
-  ordinary terminal input but has not been inferred from automated tests.
+- [x] Phase 4A manual acceptance entered `ssh g207` as ordinary terminal input,
+  reached the nested prompt, and verified that the workspace stayed attached to
+  the immutable Relay target.
 - [ ] **Deferred:** ten-minute continuous-output soak; the required 100,000-line
   fixture completed responsively.
 - [ ] **Out of scope:** simultaneous SFTP transfer.

@@ -13,7 +13,8 @@
 | [`transfer-integrity.md`](transfer-integrity.md) | Draft | Defines safe upload/download staging, metadata, symlinks, path correctness, retry ordering, and data integrity. |
 | [`macos-app-behavior.md`](macos-app-behavior.md) | Draft | Defines native menu, settings, window/tab lifecycle, restoration, notifications, and macOS drag behavior. |
 | [`remote-files-ux.md`](remote-files-ux.md) | Draft | Defines multi-selection, copy/cut/paste, drag-and-drop, navigation, and remote file operations. |
-| [`remote-workspace.md`](remote-workspace.md) | Approved foundation; transport blocked | Defines the Phase 4A session-owned read-only workspace, provider boundary, raw paths, bounded navigation/cache state, and native sidebar. |
+| [`remote-workspace.md`](remote-workspace.md) | Approved foundation; Task 9 in progress | Defines the Phase 4A session-owned read-only workspace, provider boundary, raw paths, bounded navigation/cache state, and native sidebar. |
+| [`production-sftp-transport.md`](production-sftp-transport.md) | Approved for implementation; acceptance pending | Defines Task 9's independent system-OpenSSH subsystem process, bounded read-only SFTP v3 codec, noninteractive authentication boundary, lifecycle, and production gates. |
 | [`editor-sync-ux.md`](editor-sync-ux.md) | Draft | Defines local VS Code launch, save detection, automatic upload, conflicts, and cache lifecycle. |
 
 The canonical cross-feature interaction baseline is [`../../INTERACTIONS.md`](../../INTERACTIONS.md).

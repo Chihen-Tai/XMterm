@@ -346,12 +346,13 @@ The hardening pass adds deterministic coverage for three new boundaries:
 
 - **Trusted provider mode and release fail-closed composition**
   (`RemoteWorkspaceDeveloperFixtureTests`, `RemoteWorkspacePresentationTests`):
-  the `RemoteProviderMode` carried by each workspace comes only from trusted
-  composition; the exact environment value activates the simulated fixture only
-  when the compile-time developer flag is true; release-parameterized
-  composition fails closed to the unavailable provider; the SIMULATED badge
-  presentation derives from the mode alone, and provider capability text
-  containing "Simulated" cannot create it.
+  `RemoteProviderComposition` has no public raw provider/mode pairing or arbitrary
+  production factory; public composition is fail-closed unavailable, the typed
+  simulated seam accepts only `InMemoryRemoteFileProvider`, and ordinary package
+  providers carry `.packageTest`; the exact environment value activates the
+  simulated fixture only in a developer build; both parameterized and actual
+  release-build tests fail closed; the SIMULATED badge derives from trusted mode
+  alone, and provider capability text containing "Simulated" cannot create it.
 - **Actual workspace focus gating** (`TerminalWorkspaceCommandTests`,
   `RemoteWorkspaceSidebarPolicyTests`): `RemoteWorkspaceFocusedActions` carries
   an injected workspace-focus signal fed by the sidebar's `@FocusState`;
@@ -366,7 +367,59 @@ The hardening pass adds deterministic coverage for three new boundaries:
   rows, bounded depth equal to the workspace expansion bound, raw-byte and
   lossy-path identity, and a 1,000-entry projection/lookup budget); workspace
   selection accepts exactly the projected entries, collapse moves a hidden
-  descendant selection to the collapsed directory, refresh restores only the
-  exact surviving raw path (nearest-visible-ancestor repair, never display-name
-  redirection), history restores exact recorded paths only, and selection never
-  triggers provider I/O.
+  descendant selection to the collapsed directory, cache eviction repairs to the
+  nearest visible ancestor, refresh restores only the exact surviving raw path
+  (never display-name redirection), history clears an evicted exact descendant
+  after reload, a hidden nested completion cannot reselect or render a descendant
+  behind a collapsed ancestor, and selection never triggers provider I/O.
+
+Independent handoff verification on 2026-07-18 established the following current
+evidence without rerunning or replacing the historical 404-test coverage report:
+
+- focused GREEN: developer fixture **8 tests / 1 suite** in debug and **9 / 1**
+  in an actual release test build; descendant selection **12 / 1**; visible
+  projection **8 / 1**; performance **2 / 1**; command routing **23 / 1**, all
+  with warnings treated as errors where applicable;
+- a required 12-suite combined run executed **123 tests**; 122 passed and the
+  pre-existing real-PTY test
+  `TerminalWorkspaceStoreTests.defaultWorkspaceTracksForegroundJobCompletion`
+  timed out under parallel suite load. The exact case then passed **1 / 1** in
+  2.125 s, its complete suite passed **13 / 1** in 7.106 s, and the clean full
+  verifier later passed that same case in 2.127 s. The combined invocation itself
+  is therefore not claimed as a pass;
+- after `swift package clean`, `./scripts/verify.sh` passed **436 tests in 53
+  suites in 8.716 s** and reported `XMterm verification: OK`; debug and release
+  warnings-as-errors builds passed, with the final cold release build completing
+  in **61.23 s**; the post-documentation verifier repeated **436 / 53 in 7.755
+  s** and reported OK;
+- dependency, forbidden transport, secret/log, mutation/polling, machine-path,
+  generated-artifact, and diff-whitespace scans were clean. No new dependency was
+  introduced.
+
+### Phase 4A Task 9 production transport closeout (2026-07-18)
+
+Task 9 adds deterministic suites for the binary codec, immutable OpenSSH target,
+serialized client, concrete provider, nonblocking subsystem process, and trusted
+app composition (`SFTPBinaryCodecTests`, `OpenSSHSFTPTargetTests`,
+`OpenSSHSFTPClientTests`, `OpenSSHSFTPRemoteFileProviderTests`,
+`OpenSSHSubsystemProcessTests`, and
+`RemoteWorkspaceProductionCompositionTests`). Disposable integration drives the
+production codec against `/usr/libexec/sftp-server`; automated tests never contact
+the Relay or alter known-host/authentication state.
+
+TDD RED evidence included missing-type compile failures for each layer. A review
+regression then reproduced the material transport hazard: the original synchronous
+large pipe write terminated under a closed peer. The GREEN implementation uses a
+readiness-driven nonblocking channel with bounded timeout/cancellation; focused
+production verification passed **22 tests in 6 suites in 0.135 s**. The complete
+pre-closeout verifier passed **471 tests in 59 suites in 7.672 s** and reported
+`XMterm verification: OK`; debug and release warnings-as-errors builds also passed.
+
+Real Relay authentication, known-host behavior, UI navigation/copy, nested SSH,
+two-runtime independence, package signing, and process reaping were exercised only
+in the explicit packaged manual matrix recorded in Audit 0006. They are not
+inferred from deterministic tests or run by CI.
+
+At the final stable checkpoint, `swift package clean` succeeded and the clean
+`./scripts/verify.sh` passed **471 tests in 59 suites in 7.891 s**, ending with
+`XMterm verification: OK`.

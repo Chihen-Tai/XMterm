@@ -165,8 +165,9 @@ unchecked items are labelled **Partial**, **Deferred**, **Out of scope**,
   [`remote-workspace-acceptance.md`](remote-workspace-acceptance.md) and
   `../audits/0006-phase-4a-remote-workspace-evidence.md`; unchecked rows there
   are not inferred from automated evidence here.
-- [ ] **Blocked (ADR 0007):** real Relay Host listing and production transport
-  acceptance.
+- [x] **Packaged real Relay:** production listing, navigation, lazy expansion,
+  exact copy, two-runtime isolation, nested-terminal SSH boundary, and provider
+  reaping passed under Accepted ADR 0007.
 - [ ] **Out of scope:** mutation, transfers, multi/range selection,
   remote-object clipboard, drag-and-drop, rename, delete, file opening, and
   editor sync remain Phase 4B or later.
@@ -251,9 +252,12 @@ unchecked items are labelled **Partial**, **Deferred**, **Out of scope**,
   aliases launch as `/usr/bin/ssh ALIAS`; config alias discovery/import and `ssh -G`
   presentation remain deferred beyond Phase 3.
 - [ ] **Out of scope:** SSH sleep/wake and network loss.
-- [ ] **Out of scope:** terminal/SFTP failure isolation (terminal-tab isolation is verified).
-- [ ] **Partial:** normal agent/Keychain/config behavior is preserved by the direct
-  OpenSSH process; real authentication flows were not established by automation.
+- [x] Terminal and SFTP listing processes are independent siblings; an honest
+  workspace permission failure left the terminal live, and nested terminal SSH did
+  not retarget or stop the workspace.
+- [x] System OpenSSH configuration behavior is preserved. Real acceptance used
+  public-key authentication through a configured key; no agent or Keychain use is
+  claimed.
 - [ ] **Out of scope:** transfer staging.
 - [ ] **Out of scope:** executable-mode preservation.
 - [ ] **Out of scope:** symlink-safe editor saves.

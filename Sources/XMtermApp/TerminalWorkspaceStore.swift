@@ -160,11 +160,14 @@ final class TerminalWorkspaceStore {
                 launchSpecification: specification
             )
         },
-        remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { _, _ in
-            let composition = RemoteWorkspaceDeveloperFixture.composition()
+        remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { _, specification in
+            guard case .ssh(let profile) = specification.target else {
+                return RemoteWorkspace(composition: .unavailable())
+            }
             return RemoteWorkspace(
-                provider: composition.provider,
-                providerMode: composition.mode
+                composition: RemoteWorkspaceProductionComposition.composition(
+                    for: profile
+                )
             )
         }
     ) {
@@ -187,6 +190,11 @@ final class TerminalWorkspaceStore {
             launchPreflight: { _ in },
             sessionFactory: { sessionID, specification in
                 sessionFactory(sessionID.rawValue, specification.kind)
+            },
+            remoteWorkspaceFactory: { _, _ in
+                // Legacy/test-only factory callers do not provide a validated SSH
+                // launch profile for production transport composition.
+                RemoteWorkspace(composition: .unavailable())
             }
         )
     }
