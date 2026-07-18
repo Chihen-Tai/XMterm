@@ -66,8 +66,17 @@ struct RemoteWorkspaceHistoryPolicy {
   }
 
   private static func byteCount(of location: RemoteWorkspaceLocation) -> Int {
-    location.directory.rawBytes.count
-      + (location.selectedEntry?.rawBytes.count ?? 0)
+    var storedPaths = Set(location.selection.orderedPaths)
+    var selectionByteCount = location.selection.orderedPaths.reduce(0) {
+      $0 + $1.rawBytes.count
+    }
+    for path in [location.selection.anchor, location.selection.focusedPath].compactMap({ $0 }) {
+      if storedPaths.insert(path).inserted {
+        selectionByteCount += path.rawBytes.count
+      }
+    }
+    return location.directory.rawBytes.count
+      + selectionByteCount
       + (location.scrollRestorationToken?.rawValue.utf8.count ?? 0)
   }
 }

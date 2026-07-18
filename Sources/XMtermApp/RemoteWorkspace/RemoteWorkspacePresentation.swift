@@ -80,7 +80,7 @@ enum RemoteWorkspacePresentation {
         for mode: RemoteProviderMode
     ) -> RemoteWorkspaceBadgePresentation? {
         switch mode {
-        case .production, .unavailable:
+        case .production, .unavailable, .packageTest:
             nil
         case .simulatedDeveloperFixture:
             RemoteWorkspaceBadgePresentation(
@@ -316,7 +316,8 @@ struct RemoteWorkspaceActionPolicy: Equatable, Sendable {
 
     private static func isRetryable(_ error: RemoteFileError) -> Bool {
         switch error.category {
-        case .transportUnavailable, .malformedResponse, .unsupportedEntry, .limitExceeded:
+        case .transportUnavailable, .malformedResponse, .unsupportedProtocol,
+             .unsupportedEntry, .limitExceeded:
             false
         default:
             true

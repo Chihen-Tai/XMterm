@@ -29,6 +29,15 @@ struct RemoteWorkspaceVisibleEntryProjectionTests {
             .entry(fixture.workReadme)
         ])
         #expect(projection.rows.map(\.depth) == [0, 1, 2, 2, 1, 0, 1, 0])
+        #expect(projection.orderedSelectablePaths == [
+            fixture.alpha,
+            fixture.inner,
+            fixture.deep,
+            fixture.lossyDeep,
+            fixture.alphaReadme,
+            fixture.beta,
+            fixture.workReadme
+        ])
 
         guard case let .childStatus(path, state, allowsRetry) =
             projection.rows[6].kind else {
@@ -176,8 +185,8 @@ struct RemoteWorkspaceVisibleEntryProjectionTests {
         #expect(!abc.isAncestor(of: abPath))
     }
 
-    @Test("[FILE-PERF-001] projecting 1,000 visible entries with lookups stays within the budget")
-    func projectionOfLargeListingStaysWithinBudget() throws {
+    @Test("[FILE-PERF-001] projecting 1,100 visible entries with lookups is deterministic")
+    func projectionOfLargeExpandedListingHasDeterministicRowsAndLookups() throws {
         let work = try path("/work")
         let child = try path("/work/child")
         var entries = [try RemoteFileEntry(path: child, kind: .directory)]
@@ -201,23 +210,26 @@ struct RemoteWorkspaceVisibleEntryProjectionTests {
             entries: childEntries
         )
 
-        let clock = ContinuousClock()
-        var projection: RemoteWorkspaceVisibleEntryProjection?
-        let duration = clock.measure {
-            let built = RemoteWorkspaceVisibleEntryProjection(
-                currentListing: workListing,
-                expandedDirectories: [child],
-                directoryStates: [child: .loaded(childListing)]
-            )
-            for entry in entries {
-                _ = built.isSelectable(entry.path)
-            }
-            projection = built
-        }
+        let projection = RemoteWorkspaceVisibleEntryProjection(
+            currentListing: workListing,
+            expandedDirectories: [child],
+            directoryStates: [child: .loaded(childListing)]
+        )
 
-        #expect(projection?.rows.count == 1_100)
-        #expect(projection?.selectablePaths.count == 1_100)
-        #expect(duration < .milliseconds(100))
+        #expect(projection.rows.count == 1_100)
+        #expect(projection.selectablePaths.count == 1_100)
+        #expect(
+            Set(projection.rows.map(\.id))
+                == Set((entries + childEntries).map { .entry($0.path) })
+        )
+        let childRowIndex = try #require(
+            projection.rows.firstIndex { $0.id == .entry(child) }
+        )
+        #expect(projection.rows[childRowIndex + 1].id == .entry(childEntries[0].path))
+        for entry in entries + childEntries {
+            #expect(projection.isSelectable(entry.path))
+            #expect(projection.entry(for: entry.path) == entry)
+        }
     }
 
     private struct TreeFixture {

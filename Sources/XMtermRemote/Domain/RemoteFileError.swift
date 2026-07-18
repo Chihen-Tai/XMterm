@@ -3,14 +3,20 @@ public struct RemoteFileError: Error, Equatable, Sendable {
 
     public enum Category: CaseIterable, Equatable, Hashable, Sendable {
         case authenticationRequired
+        case hostKeyVerificationFailed
+        case interactiveAuthenticationUnsupported
         case permissionDenied
         case pathNotFound
         case notDirectory
+        case alreadyExists
+        case directoryNotEmpty
+        case invalidOperation
         case disconnected
         case connectionRefused
         case timeout
         case cancelled
         case malformedResponse
+        case unsupportedProtocol
         case unsupportedEntry
         case limitExceeded
         case transportUnavailable
@@ -20,14 +26,21 @@ public struct RemoteFileError: Error, Equatable, Sendable {
         fileprivate var defaultUserFacingMessage: String {
             switch self {
             case .authenticationRequired: "Authentication is required."
+            case .hostKeyVerificationFailed: "Host-key verification failed."
+            case .interactiveAuthenticationUnsupported:
+                "Remote Workspace requires noninteractive SSH authentication."
             case .permissionDenied: "Permission was denied."
             case .pathNotFound: "The remote path was not found."
             case .notDirectory: "The remote path is not a directory."
+            case .alreadyExists: "An entry already exists at the destination."
+            case .directoryNotEmpty: "The remote directory is not empty."
+            case .invalidOperation: "The remote operation is not valid for this entry."
             case .disconnected: "The remote connection was disconnected."
             case .connectionRefused: "The remote connection was refused."
             case .timeout: "The remote operation timed out."
             case .cancelled: "The remote operation was cancelled."
             case .malformedResponse: "The remote service returned a malformed response."
+            case .unsupportedProtocol: "The remote service does not support the required protocol."
             case .unsupportedEntry: "The remote entry is unsupported."
             case .limitExceeded: "The remote response exceeded a safety limit."
             case .transportUnavailable: "Remote file transport is unavailable."

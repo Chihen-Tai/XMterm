@@ -4,7 +4,7 @@ import Observation
 public final class RemoteWorkspace {
   public static let maximumConcurrentRequestCount = 2
   public static let maximumQueuedRequestCount = 64
-  public static let maximumExpandedDirectoryCount = 30
+  public nonisolated static let maximumExpandedDirectoryCount = 30
   public static let maximumDirectoryStateCount = 32
   public static let maximumHistoryLocationCount =
     RemoteWorkspaceHistoryPolicy.maximumLocationCount
@@ -23,7 +23,12 @@ public final class RemoteWorkspace {
   public private(set) var directoryStates: [RemotePath: RemoteDirectoryLoadState] = [:]
   public private(set) var backHistory: [RemoteWorkspaceLocation] = []
   public private(set) var forwardHistory: [RemoteWorkspaceLocation] = []
-  public private(set) var selectedEntry: RemotePath?
+  public private(set) var selection = RemoteSelectionState()
+  /// Temporary Phase 4A compatibility projection for callers that only support
+  /// one selected row. Multi-selection never chooses an arbitrary primary row.
+  public var selectedEntry: RemotePath? {
+    selection.orderedPaths.count == 1 ? selection.orderedPaths.first : nil
+  }
   public private(set) var scrollRestorationToken: RemoteScrollRestorationToken?
   public private(set) var expandedDirectories: Set<RemotePath> = []
   public var cachedListingCount: Int { directoryCache.listingCount }
@@ -50,15 +55,15 @@ public final class RemoteWorkspace {
   @ObservationIgnored private var directoryStateOrder: [RemotePath] = []
   public init(
     id: RemoteWorkspaceID = RemoteWorkspaceID(),
-    provider: any RemoteFileProvider,
-    providerMode: RemoteProviderMode = .production,
+    composition: RemoteProviderComposition,
     directoryCache: RemoteDirectoryCache = RemoteDirectoryCache()
   ) {
     self.id = id
-    self.provider = provider
-    self.providerMode = providerMode
+    self.provider = composition.provider
+    self.providerMode = composition.mode
     self.directoryCache = directoryCache
   }
+
   public func start() {
     guard availability == .idle || isFailed else { return }
     beginInitialLoad()
@@ -80,11 +85,49 @@ public final class RemoteWorkspace {
   public func selectEntry(_ path: RemotePath?) {
     guard availability == .available else { return }
     guard let path else {
-      selectedEntry = nil
+      selection = selection.clearing()
       return
     }
-    guard visibleProjection.isSelectable(path) else { return }
-    selectedEntry = path
+    selection = selection.clicking(
+      path,
+      command: false,
+      shift: false,
+      visiblePaths: visibleProjection.orderedSelectablePaths
+    )
+  }
+  public func clickEntry(_ path: RemotePath, command: Bool, shift: Bool) {
+    guard availability == .available else { return }
+    selection = selection.clicking(
+      path,
+      command: command,
+      shift: shift,
+      visiblePaths: visibleProjection.orderedSelectablePaths
+    )
+  }
+  public func contextClickEntry(_ path: RemotePath) {
+    guard availability == .available else { return }
+    selection = selection.contextClicking(
+      path,
+      visiblePaths: visibleProjection.orderedSelectablePaths
+    )
+  }
+  public func moveSelectionFocus(by delta: Int, extending: Bool) {
+    guard availability == .available else { return }
+    selection = selection.movingFocus(
+      by: delta,
+      extending: extending,
+      visiblePaths: visibleProjection.orderedSelectablePaths
+    )
+  }
+  public func selectAllVisibleEntries() {
+    guard availability == .available else { return }
+    selection = selection.selectingAll(
+      visiblePaths: visibleProjection.orderedSelectablePaths
+    )
+  }
+  public func clearSelection() {
+    guard availability == .available else { return }
+    selection = selection.clearing()
   }
   public func setScrollRestorationToken(
     _ token: RemoteScrollRestorationToken?
@@ -144,7 +187,7 @@ public final class RemoteWorkspace {
     let request = RemoteWorkspaceDirectoryRequest(
       path: currentDirectory,
       generation: nextGeneration(),
-      purpose: .refresh(selectedEntry: selectedEntry),
+      purpose: .refresh(selection: selection),
       previousListing: currentListing
     )
     pendingRefreshGeneration = request.generation
@@ -244,7 +287,7 @@ public final class RemoteWorkspace {
     currentDirectory.map {
       RemoteWorkspaceLocation(
         directory: $0,
-        selectedEntry: selectedEntry,
+        selection: selection,
         scrollRestorationToken: scrollRestorationToken
       )
     }
@@ -396,7 +439,7 @@ public final class RemoteWorkspace {
     guard path != currentDirectory, let source = currentLocation else { return }
     let destination = RemoteWorkspaceLocation(
       directory: path,
-      selectedEntry: nil,
+      selection: RemoteSelectionState(),
       scrollRestorationToken: nil
     )
     scheduleNavigation(
@@ -587,16 +630,19 @@ public final class RemoteWorkspace {
       currentListing = listing
       backHistory = plan.backHistory
       forwardHistory = plan.forwardHistory
-      selectedEntry = restoredSelection(
-        plan.destination.selectedEntry,
-        exactOnly: true
+      selection = plan.destination.selection.reconciling(
+        visiblePaths: visibleProjection.orderedSelectablePaths,
+        collapsedAncestor: nil
       )
       scrollRestorationToken = plan.destination.scrollRestorationToken
       pendingNavigationGeneration = nil
       pendingDirectory = nil
     case .refresh(let priorSelection):
       currentListing = listing
-      selectedEntry = restoredSelection(priorSelection, exactOnly: false)
+      selection = priorSelection.reconciling(
+        visiblePaths: visibleProjection.orderedSelectablePaths,
+        collapsedAncestor: nil
+      )
       pendingRefreshGeneration = nil
       pendingDirectory = nil
     case .expansion:
@@ -678,11 +724,10 @@ public final class RemoteWorkspace {
   }
   private func collapse(_ path: RemotePath) {
     expandedDirectories = expandedDirectories.subtracting([path])
-    // Collapsing the ancestor of the selected descendant keeps a visible,
-    // valid selection: the collapsed directory itself.
-    if let selected = selectedEntry, path.isAncestor(of: selected) {
-      selectedEntry = path
-    }
+    selection = selection.reconciling(
+      visiblePaths: visibleProjection.orderedSelectablePaths,
+      collapsedAncestor: path
+    )
     if let queued = queuedRequests[path] {
       queuedRequests = queuedRequests.filter { $0.key != path }
       queueOrder = queueOrder.filter { $0 != path }
@@ -710,20 +755,35 @@ public final class RemoteWorkspace {
     if path == currentDirectory { return true }
     return visibleProjection.entry(for: path)?.kind == .directory
   }
-  /// Documented selection-restoration policy: the exact raw path survives when
-  /// it is still a visible loaded entry. Otherwise history restoration
-  /// (`exactOnly`) clears the selection, while refresh repair moves it to the
-  /// nearest still-visible ancestor directory below the current directory, or
-  /// clears it. Display-name equality never participates.
-  private func restoredSelection(
-    _ selection: RemotePath?,
-    exactOnly: Bool
-  ) -> RemotePath? {
-    guard let selection else { return nil }
+  private func repairSelectionIfHidden() {
+    let previousSelection = selection
     let projection = visibleProjection
-    if projection.isSelectable(selection) { return selection }
-    guard !exactOnly else { return nil }
-    var ancestor = selection.parent
+    let visiblePaths = projection.orderedSelectablePaths
+    var repairedSelection = previousSelection.reconciling(
+      visiblePaths: visiblePaths,
+      collapsedAncestor: nil
+    )
+    // Phase 4A cache eviction keeps a selected hidden descendant actionable by
+    // moving it to its nearest visible ancestor directory. Refresh and history
+    // intentionally do not take this fallback: they retain exact raw paths only.
+    for hiddenPath in previousSelection.orderedPaths where !projection.isSelectable(hiddenPath) {
+      guard let ancestor = nearestVisibleAncestor(for: hiddenPath, in: projection),
+        !repairedSelection.orderedPaths.contains(ancestor)
+      else { continue }
+      repairedSelection = repairedSelection.clicking(
+        ancestor,
+        command: true,
+        shift: false,
+        visiblePaths: visiblePaths
+      )
+    }
+    selection = repairedSelection
+  }
+  private func nearestVisibleAncestor(
+    for path: RemotePath,
+    in projection: RemoteWorkspaceVisibleEntryProjection
+  ) -> RemotePath? {
+    var ancestor = path.parent
     while let candidate = ancestor {
       if candidate == currentDirectory { return nil }
       if projection.entry(for: candidate)?.kind == .directory {
@@ -732,10 +792,6 @@ public final class RemoteWorkspace {
       ancestor = candidate.parent
     }
     return nil
-  }
-  private func repairSelectionIfHidden() {
-    guard let selected = selectedEntry else { return }
-    selectedEntry = restoredSelection(selected, exactOnly: false)
   }
   private func nextGeneration() -> UInt64 {
     precondition(requestGeneration < UInt64.max)
@@ -801,7 +857,7 @@ public final class RemoteWorkspace {
     directoryStates = [:]
     backHistory = []
     forwardHistory = []
-    selectedEntry = nil
+    selection = RemoteSelectionState()
     scrollRestorationToken = nil
     expandedDirectories = []
     directoryCache = directoryCache.clearing()

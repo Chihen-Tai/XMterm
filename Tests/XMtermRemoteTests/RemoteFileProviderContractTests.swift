@@ -279,6 +279,8 @@ struct RemoteFileProviderContractTests {
     func unavailableProviderNeverFabricatesAListing() async throws {
         let provider = UnavailableRemoteFileProvider()
 
+        #expect(await provider.capabilities == .unavailable)
+
         let resolveError = try await requireRemoteFileError {
             try await provider.resolveInitialDirectory()
         }

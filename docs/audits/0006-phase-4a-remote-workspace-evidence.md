@@ -1,15 +1,15 @@
-# Audit 0006 — Phase 4A Remote Workspace Foundation Evidence
+# Audit 0006 — Phase 4A Remote Workspace Evidence
 
-- **Date:** 2026-07-17
-- **Scope:** Execution Plan 0008 Tasks 1–8 and 10 (Task 9 remains blocked)
-- **Status:** Phase 4A is **PARTIAL**. The session-centric runtime, remote domain,
-  provider boundary, state machine, cache, native simulated UI, navigation, copy
-  actions, testing, and performance foundation are implemented. The production
-  structured SFTP transport and the real Relay Host listing remain blocked by
-  ADR 0007 (Proposed).
-- **Honesty rule:** every simulated result below used the explicit
+- **Date:** 2026-07-17; hardening and Task 9 closeout added 2026-07-18
+- **Scope:** Execution Plans 0008 and 0009; Phase 4A foundation plus production
+  read-only SFTP transport and real Relay acceptance
+- **Status:** Phase 4A is **COMPLETE**. ADR 0007 is Accepted and every required
+  production, package, real Relay, security, lifecycle, and verification gate
+  passed.
+- **Honesty rule:** historical simulated results below used the explicit
   `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` in-memory developer fixture, whose
-  every listing is labeled simulated. Nothing here is real Relay Host evidence.
+  every listing is labeled simulated. Only the Task 9 section is real Relay Host
+  evidence; old fixture results are not reinterpreted.
 
 ## Interruption recovery
 
@@ -216,21 +216,224 @@ paths tried). These remain open rows in the acceptance checklist.
   entries/32 MiB per response, 32 KiB paths, 4 KiB components, two concurrent
   provider requests, one per directory, bounded history and expansion sets.
 
-## Scope boundary confirmation
+## Historical pre-Task-9 scope boundary confirmation
 
 Inspection of every changed and untracked file confirms: no Phase 4B mutation or
 transfer surface, no Phase 5 terminal-directory synchronization, no Phase 6
 editor sync, no VS Code integration, no SFTP packet code, no `sftp`/`ls`
 parsing, no new external dependency, and no host-key weakening was introduced.
-Task 9 remains untouched and blocked behind ADR 0007's acceptance gate.
+At that checkpoint Task 9 remained untouched and blocked behind ADR 0007's
+acceptance gate; the later Task 9 section supersedes this historical boundary.
+
+## Independent hardening handoff review (2026-07-18)
+
+The review recovered stable base `2f7ffb1` and handed-off HEAD `16ef945`, read the
+complete range and every affected source/test file, and continued on
+`codex/phase-4a-hardening-review`. The pre-edit disposition was:
+
+- **Revise provider composition:** the mode was carried by the workspace, but an
+  arbitrary provider could still be constructed as `.production`, so the trust
+  boundary was representational rather than enforced.
+- **Keep focus routing:** exact-owner plus `@FocusState` gating matched the command
+  contract; only stronger direct rendered evidence was required.
+- **Keep the shared projection and selection state machine:** one projection
+  already drove rows and selection; add deterministic eviction/history/hidden
+  completion regressions and a separate projection performance gate.
+- **Revise evidence records:** the handoff ledger claimed completion before an
+  independent review and before the new release/package evidence existed.
+
+### Corrected provider composition
+
+`RemoteProviderComposition` now has a private raw initializer and package-scoped
+provider/mode storage. Public clients can construct only `.unavailable()`.
+Package code can construct the simulated mode only from the typed
+`InMemoryRemoteFileProvider`; ordinary deterministic providers use the explicit
+`.packageTest` mode. No production constructor exists. A future production seam
+must be added with the concrete reviewed ADR 0007 transport, so arbitrary
+providers cannot claim production or simulated presentation trust. The app store
+consumes the composition rather than separate provider/mode values. The simulated
+badge appears only for `.simulatedDeveloperFixture`; `.production`,
+`.unavailable`, and `.packageTest` have none.
+
+Provider RED/GREEN evidence:
+
+- the initial composition test failed to compile because
+  `RemoteProviderComposition` and the composition initializer did not exist;
+- an external-client compiler probe then demonstrated that the handed-off public
+  arbitrary-production seam compiled, and after correction the same probe was
+  rejected;
+- stronger tests expecting `.packageTest` failed at three assertions before that
+  mode existed;
+- final debug fixture suite passed **8 tests / 1 suite in 1.899 s**; an actual
+  `#if !DEBUG` release test passed **9 / 1 in 1.855 s**;
+- independent provider specification/code-quality reviews and the final security
+  review approved the corrected boundary.
+
+### Selection, projection, focus, and performance evidence
+
+The production selection state machine was retained. The projection depth now
+derives from `RemoteWorkspace.maximumExpandedDirectoryCount`, removing the second
+literal authority. New deterministic tests prove:
+
+- cache eviction moves a selected descendant to the nearest still-visible
+  ancestor;
+- history clears an exact descendant that is absent after deterministic eviction
+  and reload;
+- a nested completion behind a collapsed ancestor does not render or reselect the
+  hidden descendant, while nested expansion intent is restored on re-expansion.
+
+Focused results: descendant selection **12 / 1 in 0.480 s**, visible projection
+**8 / 1 in 0.018 s**, performance **2 / 1 in 0.229 s**, and command routing
+**23 / 1 in 0.175 s** with warnings as errors where applicable. The original
+1,000-entry model/order/cache-publication p90 gate remains unchanged. A separate
+test now constructs a 1,000-entry visible projection and performs 1,000 iterations
+of exact hit/miss entry and selectability lookups; fixture setup is outside timing,
+with one warm-up plus 11 measured runs, and p90 passed the 100 ms budget. The
+focused suite duration is not substituted for the measured p90.
+
+### Historical 2026-07-18 hardening packaged manual evidence
+
+Debug shipping/default mode showed the local explanation and, after launching the
+Relay profile, exactly `Remote file transport unavailable`, with no fake listing
+or simulated badge. In simulated debug mode, the persistent accessible warning
+`Simulated developer fixture. This listing is not a real remote host.` appeared
+with 12 items.
+
+With terminal focus, every Remote menu command was disabled. Clicking the `large`
+row enabled the applicable commands; returning focus to the terminal disabled them
+again. Direct Refresh and Back sidebar buttons still worked while terminal focus
+remained active, including navigation to `/simulated/測試資料`. Switching to a local
+tab disabled all Remote commands; switching back retained workspace state but kept
+commands disabled until list focus returned. Navigation labels/help and the
+simulated warning were exposed through the accessibility tree.
+
+For release acceptance, the cold warnings-as-errors build passed, its binary was
+staged into `dist/XMterm.app`, ad-hoc signed, and strict code-sign verification
+passed. Launching that actual release bundle with
+`XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` still showed transport unavailable and
+no badge/listing. Both packaged passes quit through the live-SSH confirmation and
+left no packaged XMterm process.
+
+This new pass did **not** manually re-exercise exact terminal `Command-C` copy,
+Control-byte input to the PTY, nested-directory `Command-Down`, exact rendered
+collapse/refresh selection repair, two simultaneous SSH sessions, VoiceOver
+auditory output, full Tab traversal, Light/Dark, Reduce Motion, disclosure-click,
+Instruments, or pixel screenshots. Automated/source evidence and the earlier
+2026-07-17 manual observations remain recorded separately; these omissions are not
+presented as new rendered passes.
+
+### 2026-07-18 verification and safety scans
+
+A required 12-suite combined warnings-as-errors run executed **123 tests**; 122
+passed and the pre-existing real-PTY integration test
+`TerminalWorkspaceStoreTests.defaultWorkspaceTracksForegroundJobCompletion`
+timed out under parallel suite load. The exact test then passed **1 / 1 in 2.125
+s**, the entire suite passed **13 / 1 in 7.106 s**, and the clean full verifier
+passed the same case in 2.127 s. The combined invocation is not claimed as a pass;
+all required suites have passing isolated or clean-full evidence.
+
+Debug and release warnings-as-errors builds passed; the final cold release build
+completed in **61.23 s**. After `swift package clean`, `./scripts/verify.sh` passed
+**436 tests in 53 suites in 8.716 s** and printed `XMterm verification: OK`.
+Static scans found no forbidden shell/SFTP/host-key pattern, production logging of
+sensitive values, Phase 4B mutation or polling surface, machine-specific path,
+tracked generated artifact, dependency change, or whitespace error. The only
+“token” source hit was the non-secret `scrollRestorationToken`. The historical
+`default.profraw` finding above remains preserved and resolved in `2f7ffb1`.
+
+Independent final code and security reviews approved the resulting change set.
+No file was removed and no external dependency was added. Task 9 and Phase 4B/5/6
+remain untouched.
+
+## Task 9 production transport and real Relay closeout (2026-07-18)
+
+### Implemented production boundary
+
+The accepted transport keeps the terminal on its interactive PTY-backed
+`/usr/bin/ssh` process. Each supported SSH runtime independently owns a concrete
+`OpenSSHSFTPRemoteFileProvider`, serialized `OpenSSHSFTPClient`, bounded binary
+SFTP v3 codec, and noninteractive `/usr/bin/ssh -T -o BatchMode=yes -s ... sftp`
+subsystem process. The codec sends only `INIT`, `REALPATH`, `OPENDIR`, `READDIR`,
+and `CLOSE`; it parses structured `VERSION`, `STATUS`, `HANDLE`, `NAME`, and attrs,
+preserves raw filename bytes, ignores `longname`, validates request IDs and bounds,
+and tears down on any possible desynchronization.
+
+The process channel keeps stdout binary-only and stderr separate/bounded. Its
+writer is readiness-driven and nonblocking (`O_NONBLOCK` and `F_SETNOSIGPIPE`) with
+finite timeout/cancellation. Close invalidates work, closes descriptors, escalates
+HUP/TERM/KILL within bounds, and retains late reaping. Production composition is
+constructible only with the concrete provider; release ignores the simulated
+fixture gate.
+
+### TDD, review, and automated evidence
+
+RED evidence comprised missing codec/target/client/provider/process/composition
+compile failures. The first review found one High synchronous-write wedge and
+Medium malformed-name/reaping issues; security review found Medium write and auth-
+diagnostic classification issues. A regression with a 1 MiB write and closed peer
+failed by signal 13 before the nonblocking fix. All findings were fixed test-first.
+Independent code and security re-review reported no remaining Critical, High, or
+Medium finding and approved production acceptance.
+
+Focused production suites passed **22 tests in 6 suites in 0.135 s**. The full
+pre-closeout verifier passed **471 tests in 59 suites in 7.672 s** and printed
+`XMterm verification: OK`. Debug and release warnings-as-errors builds passed; the
+cold release build completed in **10.43 s**. The focused performance suite passed
+**2 / 1 in 0.235 s**, preserving the original **20.84 ms p90** local publication
+gate and the separate projection p90 below 100 ms. Static scans found no production
+logging, human-output parser, shell wrapper, host-key bypass, mutation SFTP verb,
+new dependency, or Phase 4B/5/6 surface.
+
+### Packaged and real Relay evidence
+
+The staged debug app and ad-hoc signed release both loaded real Relay data. The
+signed package binary UUID matched the release build UUID
+`E193E631-5778-3732-94B7-7E0036ED8998`; strict code-sign verification passed.
+Launching that release with `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` still
+showed the real production listing and no SIMULATED badge. Local tabs owned no
+workspace transport.
+
+The exact subsystem argv observed for Relay was:
+
+```text
+/usr/bin/ssh -T -o BatchMode=yes -s -p 54426 allen921103@140.109.226.155 sftp
+```
+
+The interactive terminal simultaneously used its separate
+`/usr/bin/ssh -p 54426 allen921103@140.109.226.155` process. Authentication was
+public key through a configured OpenSSH key. `ssh-agent` exposed no identities,
+`ControlMaster` was false, and normal known-host policy succeeded; no host-key
+bypass or Keychain use is claimed.
+
+Real listings resolved `/home/JoeyJen`, `/home/allen921103`, `/Data2`,
+`/Data2/allen921103`, and `/`. Acceptance exercised Back, Forward, Parent,
+breadcrumb, Refresh, lazy expansion, nested selection, and exact Copy Path/Name/
+Parent/Shell-Quoted values. Expanding protected `/root` exposed an honest Retry
+error rather than an empty listing. Two Relay runtimes showed independent current
+directories/state and two independent subsystem processes.
+
+After manually entering `ssh g207`, the terminal reached
+`allen921103@g207:/Data2/allen921103` while the workspace remained attached to and
+operable against the immutable Relay snapshot. Closing one Relay tab reaped its
+provider process; quitting reaped the remainder. No XMterm or SFTP child remained.
+
+### Scope and limitations
+
+No mutation, transfer, multi-selection, drag/drop, local editor, sync, automatic
+second-hop retargeting, reconnect, distribution signing, or notarization work was
+added. Developer ID/notarization, full VoiceOver auditory output, exhaustive
+keyboard traversal/appearance/Reduce Motion, Instruments, and the 10,000-entry
+release benchmark remain later release evidence, not Phase 4A Task 9 blockers.
 
 ## Final verification
 
-After the FILE-NAV-002 honesty fix, `./scripts/verify.sh` passed **404 tests in
-51 suites** on 2026-07-17 (the clean-state run earlier the same day also passed
-404/51). Both warnings-as-errors builds remain clean.
+Historical checkpoints remain above: 404/51 for the original foundation and
+436/53 for hardening. Task 9's pre-closeout verifier passed 471/59. At the final
+stable checkpoint, `swift package clean` succeeded and `./scripts/verify.sh`
+passed **471 tests in 59 suites in 7.891 s**, ending with `XMterm verification:
+OK`.
 
 ## Recommended next task
 
-**Complete Phase 4A production SFTP transport under ADR 0007.** Do not begin
-Phase 4B while the transport gate is unresolved.
+**Phase 4B — Remote File Mutations and Transfers.** Phase 4A is complete; Phase 4B
+was not started during this closeout.

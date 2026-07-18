@@ -1,5 +1,9 @@
-public struct UnavailableRemoteFileProvider: RemoteFileProvider {
+public struct UnavailableRemoteFileProvider: RemoteFileProvider, RemoteFileCapabilityProvider {
     public init() {}
+
+    public var capabilities: RemoteFileCapabilities {
+        get async { .unavailable }
+    }
 
     public func resolveInitialDirectory() async throws -> RemotePath {
         throw Self.unavailableError

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import XMtermCore
+import XMtermRemote
 import XMtermTerminal
 @testable import XMtermApp
 
@@ -203,6 +204,9 @@ struct TerminalWorkspaceStoreProfileTests {
             launchPreflight: { _ in },
             sessionFactory: { sessionID, specification in
                 makeSession(id: sessionID, specification: specification)
+            },
+            remoteWorkspaceFactory: { _, _ in
+                RemoteWorkspace(composition: .unavailable())
             }
         )
 

@@ -148,11 +148,21 @@ performs no provider I/O.
 The deterministic 1,000-entry benchmark (`RemoteWorkspacePerformanceTests`)
 measures fixture construction separately from the model/order/cache-publication
 segment and observed **20.84 ms p90** against the 100 ms budget (one warm-up plus
-11 publications; debug test overhead included). Cache bounds (32 directories,
-20,000 entries, 10,000 entries/32 MiB per response) and provider-concurrency
-bounds are asserted by `RemoteWorkspaceBoundednessTests` and the provider
-contract suite. Cold launch, Instruments main-thread stall capture, resident
-memory with a populated workspace, and the 10,000-entry release gate remain
-unmeasured and open; the packaged simulated-fixture inspection recorded in
+11 publications; debug test overhead included). The 2026-07-18 hardening pass
+added a separate gate that constructs the 1,000-entry visible projection and
+performs 1,000 iterations of exact hit/miss entry and selectability lookups; its
+p90 also passed the 100 ms budget with fixture construction outside timing, one
+warm-up, and 11 measured runs. The final focused two-test performance suite passed
+in 0.235 s; that suite duration is not presented as the measured application p90.
+
+Cache bounds (32 directories, 20,000 entries, 10,000 entries/32 MiB per response)
+and provider-concurrency bounds are asserted by
+`RemoteWorkspaceBoundednessTests` and the provider contract suite. Cold launch,
+Instruments main-thread stall capture, resident memory with a populated
+workspace, and the 10,000-entry release gate remain unmeasured and open; the
+packaged real-Relay inspection recorded in
 `docs/audits/0006-phase-4a-remote-workspace-evidence.md` is qualitative, not a
-release benchmark.
+release benchmark. The production provider is event-driven: it uses readiness-
+based nonblocking pipe I/O, serialized bounded requests, and no polling. Network
+latency remains inside the independent OpenSSH/SFTP process and is not included in
+the local projection p90.

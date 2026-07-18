@@ -530,7 +530,7 @@ struct TerminalWorkspaceCommandTests {
         let provider = fixture.makeProvider()
         let workspace = RemoteWorkspace(provider: provider)
         let runtimeID = TerminalSessionID()
-        var workspaceFocused = false
+        let focusProbe = FocusProbe()
         workspace.start()
         try await waitUntil { workspace.availability == .available }
 
@@ -539,7 +539,7 @@ struct TerminalWorkspaceCommandTests {
             runtimeID: runtimeID,
             workspace: workspace,
             pasteboard: RemotePathPasteboard(writer: CommandTestPasteboardWriter()),
-            isWorkspaceFocused: { workspaceFocused },
+            isWorkspaceFocused: { focusProbe.isFocused },
             currentOwner: {
                 RemoteWorkspaceFocusOwner(
                     runtimeID: runtimeID,
@@ -559,13 +559,13 @@ struct TerminalWorkspaceCommandTests {
         let listCountAfterDirect = await provider.recordedAttempts
             .count(where: { $0 == .listDirectory })
 
-        workspaceFocused = true
+        focusProbe.isFocused = true
         #expect(actions.hasWorkspaceFocus)
         #expect(route.isEnabled(.refresh))
         #expect(route.perform(.refresh))
         try await waitUntil { workspacePendingSettled(workspace) }
 
-        workspaceFocused = false
+        focusProbe.isFocused = false
         #expect(!route.isEnabled(.refresh))
         #expect(!route.perform(.refresh))
         let finalListCount = await provider.recordedAttempts
@@ -579,13 +579,13 @@ struct TerminalWorkspaceCommandTests {
             runtimeID: TerminalSessionID(),
             workspaceID: RemoteWorkspaceID()
         )
-        var focused = false
+        let focusProbe = FocusProbe()
         var performed: [RemoteWorkspaceAction] = []
         let route = RemoteWorkspaceCommandRoute(
             actions: try focusedActions(
                 owner: owner,
                 currentOwner: { owner },
-                isWorkspaceFocused: { focused },
+                isWorkspaceFocused: { focusProbe.isFocused },
                 performed: { performed.append($0) }
             )
         )
@@ -599,7 +599,7 @@ struct TerminalWorkspaceCommandTests {
         }
         #expect(performed.isEmpty)
 
-        focused = true
+        focusProbe.isFocused = true
         #expect(route.perform(RemoteWorkspaceKeyboardCommand.goToParent.action))
         #expect(route.perform(RemoteWorkspaceKeyboardCommand.openSelection.action))
         #expect(route.perform(.refresh))
@@ -880,6 +880,11 @@ struct TerminalWorkspaceCommandTests {
         workspace.pendingDirectory == nil
             && workspace.activeRequestCount == 0
             && workspace.queuedRequestCount == 0
+    }
+
+    @MainActor
+    private final class FocusProbe {
+        var isFocused = false
     }
 
     @MainActor

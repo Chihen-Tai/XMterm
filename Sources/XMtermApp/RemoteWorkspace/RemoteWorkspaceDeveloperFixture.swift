@@ -23,13 +23,6 @@ enum RemoteWorkspaceDeveloperFixture {
     static let isDeveloperBuild = false
     #endif
 
-    /// Provider plus its trusted mode, so composition cannot pair the simulated
-    /// provider with a non-simulated presentation or vice versa.
-    struct Composition {
-        let provider: any RemoteFileProvider
-        let mode: RemoteProviderMode
-    }
-
     static func isEnabled(environment: [String: String]) -> Bool {
         environment[environmentKey] == simulatedValue
     }
@@ -37,25 +30,16 @@ enum RemoteWorkspaceDeveloperFixture {
     static func composition(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         isDeveloperBuild: Bool = Self.isDeveloperBuild
-    ) -> Composition {
+    ) -> RemoteProviderComposition {
         guard isDeveloperBuild, isEnabled(environment: environment) else {
-            return Composition(
-                provider: UnavailableRemoteFileProvider(),
-                mode: .unavailable
-            )
+            return .unavailable()
         }
         do {
-            return Composition(
-                provider: try simulatedProvider(),
-                mode: .simulatedDeveloperFixture
-            )
+            return .simulatedDeveloperFixture(try simulatedProvider())
         } catch {
             // Fail closed into the honest transport-unavailable state rather than
             // presenting a partially built simulated graph.
-            return Composition(
-                provider: UnavailableRemoteFileProvider(),
-                mode: .unavailable
-            )
+            return .unavailable()
         }
     }
 

@@ -276,16 +276,36 @@ bounded per-runtime LRU `RemoteDirectoryCache`, and the `@MainActor` observable
 after its listing succeeds; newer request generations always win; refresh changes
 no history; expansion is lazy and immediate-child-only.
 
+Provider identity and presentation trust are composed together in
+`RemoteProviderComposition`. Its raw provider/mode pairing is private, public
+clients can construct only the fail-closed unavailable composition, and package
+code has distinct typed seams for the in-memory developer fixture and ordinary
+test providers. The only production constructor accepts the concrete
+`OpenSSHSFTPRemoteFileProvider`; there is no arbitrary “production provider”
+factory. The workspace stores the provider privately and publishes only the
+trusted mode. A package-test provider therefore cannot acquire production or
+simulated presentation semantics.
+
 `XMtermApp` owns the native presentation: `RemoteWorkspaceSidebar` below compact
 Saved Sessions in the `NavigationSplitView` sidebar (240–420 points), pure
 presentation/action policies, exact-owner focused commands and the Remote menu,
 context-menu copy actions, and the single plain-text-item pasteboard adapter.
 Workspace publication never recreates or refocuses the retained terminal view,
-which stays keyed by terminal-session identity. The shipping provider reports an
-honest transport-unavailable state while ADR 0007 blocks the production structured
-SFTP adapter; an explicit `XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` environment
-value opts a developer build into a deterministic in-memory graph whose listings
-are labeled simulated.
+which stays keyed by terminal-session identity. Supported SSH runtimes compose a
+production `OpenSSHSFTPRemoteFileProvider` from the immutable launch snapshot.
+That actor owns an independent `/usr/bin/ssh -T -o BatchMode=yes -s ... sftp`
+process, a bounded read-only SFTP v3 codec, and serialized requests. The terminal
+continues through its sibling PTY `/usr/bin/ssh` process. An explicit
+`XMTERM_REMOTE_WORKSPACE_FIXTURE=simulated` value opts only a developer build into
+the labeled deterministic graph; release builds ignore it and retain production.
+
+The listing and selection paths share
+`RemoteWorkspaceVisibleEntryProjection`: one bounded projection produces the rows,
+exact raw-byte selectable paths, and path-to-entry lookup. Its maximum depth is
+derived from the workspace expansion limit. Collapse repairs a hidden descendant
+selection to the collapsed directory; cache eviction repairs to the nearest still
+visible ancestor; refresh/history restoration accepts only the exact surviving
+raw path. These repairs perform no provider I/O.
 
 ### Remote file boundary
 
@@ -293,8 +313,11 @@ All remote operations go through the Phase 4A `RemoteFileProvider` boundary (the
 earlier `RemoteFileService` naming refers to the same seam's future mutation and
 transfer surface). UI code receives structured values, never parses human-formatted command output.
 
-The first implementation may wrap system OpenSSH tools, but the abstraction must allow a later native SFTP implementation without changing UI or domain code. Effective
-SSH options are delegated to system OpenSSH; UI alias discovery is never the source
+The accepted Phase 4A implementation uses system OpenSSH as the secure transport
+and implements only binary SFTP v3 `INIT`, `REALPATH`, `OPENDIR`, `READDIR`, and
+`CLOSE` framing behind the provider boundary. It never invokes the human `sftp`
+client or parses `ls`, prompts, terminal output, or `longname`. Effective SSH
+options remain delegated to system OpenSSH; UI alias discovery is never the source
 of truth for connection semantics.
 
 Transfers use explicit revision/state models and safe staging/finalization. Remote

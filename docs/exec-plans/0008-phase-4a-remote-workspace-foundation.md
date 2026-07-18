@@ -23,7 +23,7 @@ Swift Testing, SwiftPM, existing SwiftTerm/PTY/OpenSSH terminal boundary.
 
 ---
 
-- **Status:** Active — foundation execution approved; production transport blocked
+- **Status:** COMPLETE — foundation and production transport accepted 2026-07-18
 - **Started:** 2026-07-16
 - **Design:** [`../design-docs/remote-workspace.md`](../design-docs/remote-workspace.md)
 - **Architecture ADR:**
@@ -33,9 +33,11 @@ Swift Testing, SwiftPM, existing SwiftTerm/PTY/OpenSSH terminal boundary.
 - **Checklist:**
   [`../checklists/remote-workspace-acceptance.md`](../checklists/remote-workspace-acceptance.md)
 - **Baseline:** `./scripts/verify.sh` passed 268 tests in 35 suites on 2026-07-16
-- **Repository state:** `XMterm-starter` is an untracked directory inside an
-  unrelated parent repository; this plan uses direct inspection and verification,
-  not misleading parent-repository commits
+- **Repository state at plan start:** `XMterm-starter` was an untracked directory
+  inside an unrelated parent repository, so early task evidence used direct
+  inspection instead of misleading parent commits. By the 2026-07-18 handoff it
+  was its own repository; the review range is stable base `2f7ffb1` through
+  handed-off HEAD `16ef945`.
 
 ## Locked acceptance requirements
 
@@ -138,6 +140,14 @@ cancellation, and close. Phase 4A builds a deterministic
 `InMemoryRemoteFileProvider` and an honest `UnavailableRemoteFileProvider` used by
 shipping composition while the production gate is blocked.
 
+The 2026-07-18 hardening review makes the trust boundary explicit:
+`RemoteProviderComposition` privately binds provider and presentation mode. Public
+clients can construct only unavailable; package code can construct the simulated
+mode only from the typed in-memory provider; ordinary test providers use the
+distinct `.packageTest` mode. There is no arbitrary production constructor. ADR
+0007 must add a concrete reviewed transport type and composition seam before
+production mode can be constructed.
+
 The stock `/usr/bin/sftp` path is rejected: it has no structured listing mode and
 human `ls` output cannot safely frame newline/control/non-UTF-8 filenames. A custom
 SFTP implementation is prohibited. Existing standalone Swift SSH libraries do not
@@ -167,6 +177,11 @@ step below may substitute textual parsing or a fake Relay listing.
 - Open pushes history and clears Forward; Back/Forward are reciprocal; Parent and
   breadcrumbs use the same transaction; Refresh changes no history.
 - Refresh keeps selection only if the exact raw path survives.
+- One bounded visible-entry projection supplies both rendered rows and exact
+  selectable paths. Collapse repairs a selected hidden descendant to the collapsed
+  directory; eviction repairs to the nearest visible ancestor; refresh/history
+  restoration never redirects by display name and clears an exact path absent
+  after reload.
 - Newer request generations win; cancelled/stale completions are ignored.
 - Cache bounds are 32 directories and 20,000 total entries; one response is capped
   at 10,000 entries and 32 MiB.
@@ -669,6 +684,12 @@ Label every fixture as simulated; never present it as Relay evidence.
 
 ### Task 9: Production-provider acceptance gate
 
+Task 9 resumed on 2026-07-18 under the approved system-OpenSSH plus bounded,
+read-only Swift SFTP v3 architecture. The detailed TDD and production acceptance
+plan is [`0009-phase-4a-production-sftp-transport.md`](0009-phase-4a-production-sftp-transport.md).
+ADR 0007 is Accepted after the implementation, package, security, lifecycle, and
+real Relay gates passed.
+
 **Files:**
 - Modify only after an explicit dependency decision: `Package.swift`
 - Create only after ADR 0007 acceptance: production adapter/process files under
@@ -679,26 +700,26 @@ Label every fixture as simulated; never present it as Relay evidence.
 - Modify: `docs/checklists/remote-workspace-acceptance.md`
 - Modify: `docs/audits/0006-phase-4a-remote-workspace-evidence.md`
 
-- [ ] **Blocked — select and review a mature packet adapter**
+- [x] **Unblocked by explicit architecture approval — select the bounded adapter**
 
-It must operate over system OpenSSH subsystem binary streams without replacing
-OpenSSH config/auth/known-host semantics. Record source maintenance, security,
-license, transitive dependencies, package size, signing, and distribution impact.
+The selected dependency-free adapter is XMterm's narrowly scoped read-only SFTP v3
+codec over system OpenSSH subsystem binary streams. It does not replace OpenSSH
+config/auth/known-host semantics. The codec is not a general SSH or SFTP client.
 
-- [ ] **Blocked — implement through TDD only after the adapter gate passes**
+- [x] **Complete — implemented through TDD**
 
 Write malformed/oversized packet, raw-name, metadata, symlink, handshake, exact
 argv, no-shell, cancellation, timeout, prompt-channel, process-reaping, and local
 disposable `sftp-server` tests before production code.
 
-- [ ] **Blocked — perform real Relay manual acceptance**
+- [x] **Complete — real Relay manual acceptance passed**
 
 Launch the saved Relay Host snapshot, resolve the server-reported initial directory,
 list real immediate children, navigate/refresh/copy, switch among local and two SSH
 tabs, close one session, inspect child processes, and verify no credentials or path
 payloads entered logs. Never automate Relay access in CI.
 
-If these rows remain blocked, mark Phase 4A Partial and do not begin Phase 4B.
+Both rows passed; Phase 4A can close without beginning Phase 4B.
 
 ### Task 10: Canonical documentation, audit, and handoff
 
@@ -739,3 +760,67 @@ If Task 9 passes, mark Phase 4A complete and recommend exactly **Phase 4B — Re
 File Mutations and Transfers**. If Task 9 remains blocked, mark Phase 4A Partial and
 recommend exactly **Complete Phase 4A production SFTP transport under ADR 0007**;
 do not claim the broader phase is complete.
+
+### Task 11: Independent hardening handoff review (2026-07-18)
+
+**Recovered range:** stable base `2f7ffb1` through handed-off HEAD `16ef945`.
+**Working branch:** `codex/phase-4a-hardening-review`.
+**Scope lock:** `SESS-011`, `FILE-WORKSPACE-001`, `FILE-NAV-002`,
+`FILE-CACHE-001`, `FILE-STATE-001`, `FILE-COPY-001`, the read-only/single-selection
+portion of `FILE-SEL-001`, and applicable `FILE-LIST-001` / `FILE-PERF-001` only.
+Task 9 and Phase 4B/5/6 are explicitly excluded.
+
+Acceptance criteria:
+
+- provider identity and presentation trust cannot be paired arbitrarily; release
+  remains unavailable even when the simulated environment value is set;
+- Remote menu routing requires the selected runtime's actual workspace-list focus,
+  while direct sidebar controls remain usable without menu focus;
+- rendered rows, exact selectable paths, collapse/eviction repair, refresh, and
+  history use one bounded projection with raw-path identity and no provider I/O;
+- the existing 1,000-entry publication gate remains intact and a separate
+  1,000-entry projection/exact-lookup p90 gate passes below 100 ms;
+- debug/release warnings-as-errors builds, focused suites, the clean full verifier,
+  source/security scans, and packaged debug/release acceptance all pass; unresolved
+  manual rows remain stated as limitations rather than inferred passes;
+- The hardening handoff itself retained **PARTIAL** status; the later Task 9
+  closeout supersedes that historical checkpoint.
+
+- [x] Publish the pre-edit keep/revise/reject review matrix.
+- [x] Reproduce the provider-composition trust flaw with a compiler probe, write
+  RED tests, and implement the smallest typed fail-closed composition boundary.
+- [x] Add eviction/history/hidden-completion regressions and the separate
+  projection performance gate without changing the selection state machine.
+- [x] Obtain independent specification, code-quality, security, and final code
+  reviews; address every material finding.
+- [x] Exercise shipping-default and simulated debug packages, actual list-focus
+  command gating, direct-control behavior, tab switching, and release fail-closed
+  behavior. Record the unperformed accessibility/appearance/Instruments cases.
+- [x] Run `swift package clean` and the full verifier: **436 tests in 53 suites in
+  8.716 s**, `XMterm verification: OK`. Record the one combined-matrix real-PTY
+  timeout and its passing isolated, full-suite, and clean-verifier reruns without
+  claiming the combined invocation passed.
+- [x] Update the canonical ledger, audit, checklist, architecture, security,
+  performance, testing, design, and execution-plan records. Task 9 and Phase
+  4B/5/6 remain untouched.
+
+### Task 12: Task 9 production transport closeout (2026-07-18)
+
+- [x] Implement and test the bounded read-only SFTP v3 codec, exact OpenSSH target
+  construction, nonblocking process channel, fatal-desynchronization client,
+  production provider, and concrete production composition.
+- [x] Pass focused production suites (**22 tests / 6 suites**), the pre-closeout
+  verifier (**471 / 59**), debug/release warnings-as-errors builds, clean static
+  scans, and independent code/security re-review with no remaining Critical/High/
+  Medium finding.
+- [x] Package debug and signed release builds; prove release retains production
+  when simulated injection is requested and matches the release binary UUID.
+- [x] On the real Relay, verify initial resolution/listing, navigation, refresh,
+  lazy expansion, nested selection, four copy actions, permission failure,
+  two-runtime isolation, exact independent SFTP argv, nested `ssh g207` terminal
+  boundary, and close/quit process reaping.
+- [x] Record public-key authentication through a configured OpenSSH key, with no
+  agent identity, app-owned `ControlMaster`, host-key bypass, or Keychain claim.
+- [x] Accept ADR 0007 and mark Phase 4A **COMPLETE**. The next task is exactly
+  **Phase 4B — Remote File Mutations and Transfers**; no Phase 4B/5/6 code was
+  started during closeout.

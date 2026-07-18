@@ -107,6 +107,37 @@ struct RemoteWorkspaceDescendantSelectionTests {
         #expect(workspace.currentDirectory == fixture.work)
     }
 
+    @Test("[FILE-CACHE-001, FILE-SEL-001] cache eviction repairs a selected descendant to the nearest visible ancestor")
+    func cacheEvictionRepairsSelectedDescendantToNearestVisibleAncestor() async throws {
+        let fixture = try makeGraphFixture()
+        let workspace = RemoteWorkspace(
+            provider: fixture.makeProvider(),
+            directoryCache: RemoteDirectoryCache(
+                maximumListingCount: 3,
+                maximumTotalEntryCount: 16
+            )
+        )
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        try await expandLoaded(workspace, fixture.alpha)
+        try await expandLoaded(workspace, fixture.inner)
+
+        workspace.selectEntry(fixture.deep)
+        #expect(workspace.selectedEntry == fixture.deep)
+        #expect(workspace.visibleProjection.isSelectable(fixture.deep))
+
+        try await expandLoaded(workspace, fixture.beta)
+
+        #expect(workspace.cachedListingCount == 3)
+        #expect(workspace.expandedDirectories.contains(fixture.alpha))
+        #expect(workspace.expandedDirectories.contains(fixture.inner))
+        #expect(workspace.expandedDirectories.contains(fixture.beta))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.deep))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.inner))
+        #expect(workspace.visibleProjection.isSelectable(fixture.alpha))
+        #expect(workspace.selectedEntry == fixture.alpha)
+    }
+
     @Test("[FILE-NAV-002] refresh repairs a vanished selection without display-name redirection")
     func refreshRepairsSelectionWhenExactPathDisappears() async throws {
         let provider = ControllableRemoteFileProvider()
@@ -190,6 +221,55 @@ struct RemoteWorkspaceDescendantSelectionTests {
         #expect(workspace.selectedEntry == fixture.deep)
     }
 
+    @Test("[FILE-NAV-002, FILE-SEL-001] history restores the complete ordered selection state")
+    func historyRestoresCompleteSelectionState() async throws {
+        let fixture = try makeGraphFixture()
+        let workspace = RemoteWorkspace(provider: fixture.makeProvider())
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        try await expandLoaded(workspace, fixture.alpha)
+
+        workspace.clickEntry(fixture.alpha, command: false, shift: false)
+        workspace.clickEntry(fixture.beta, command: true, shift: false)
+        workspace.openDirectory(fixture.beta)
+        try await waitUntil { workspace.currentDirectory == fixture.beta }
+
+        workspace.goBack()
+        try await waitUntil { workspace.currentDirectory == fixture.work }
+        #expect(workspace.selection.orderedPaths == [fixture.alpha, fixture.beta])
+        #expect(workspace.selection.anchor == fixture.beta)
+        #expect(workspace.selection.focusedPath == fixture.beta)
+    }
+
+    @Test("[FILE-NAV-002] history clears an exact descendant absent after cache eviction and reload")
+    func historyClearsExactDescendantAbsentAfterCacheEvictionAndReload() async throws {
+        let fixture = try makeGraphFixture()
+        let workspace = RemoteWorkspace(
+            provider: fixture.makeProvider(),
+            directoryCache: RemoteDirectoryCache(
+                maximumListingCount: 3,
+                maximumTotalEntryCount: 16
+            )
+        )
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        try await expandLoaded(workspace, fixture.alpha)
+        try await expandLoaded(workspace, fixture.inner)
+
+        workspace.selectEntry(fixture.deep)
+        workspace.openDirectory(fixture.beta)
+        try await waitUntil { workspace.currentDirectory == fixture.beta }
+        #expect(workspace.backHistory.last?.selectedEntry == fixture.deep)
+
+        workspace.goBack()
+        try await waitUntil { workspace.currentDirectory == fixture.work }
+
+        #expect(workspace.cachedListingCount == 3)
+        #expect(!workspace.visibleProjection.isSelectable(fixture.deep))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.inner))
+        #expect(workspace.selectedEntry == nil)
+    }
+
     @Test("[FILE-NAV-002] a failed navigation preserves the successful selection")
     func failedNavigationPreservesSelection() async throws {
         let fixture = try makeGraphFixture()
@@ -227,6 +307,126 @@ struct RemoteWorkspaceDescendantSelectionTests {
 
         first.selectEntry(nil)
         #expect(second.selectedEntry == fixture.beta)
+    }
+
+    @Test("[SESS-011, FILE-SEL-001] workspaces isolate multi-selection anchors and focus")
+    func independentWorkspaceSelectionState() async throws {
+        let fixture = try makeGraphFixture()
+        let first = RemoteWorkspace(provider: fixture.makeProvider())
+        let second = RemoteWorkspace(provider: fixture.makeProvider())
+        first.start()
+        second.start()
+        try await waitUntil {
+            first.availability == .available && second.availability == .available
+        }
+
+        first.clickEntry(fixture.alpha, command: false, shift: false)
+        first.clickEntry(fixture.beta, command: true, shift: false)
+        second.clickEntry(fixture.beta, command: false, shift: false)
+
+        #expect(first.selection.orderedPaths == [fixture.alpha, fixture.beta])
+        #expect(first.selection.anchor == fixture.beta)
+        #expect(first.selection.focusedPath == fixture.beta)
+        #expect(second.selection.orderedPaths == [fixture.beta])
+        #expect(second.selection.anchor == fixture.beta)
+        #expect(second.selection.focusedPath == fixture.beta)
+    }
+
+    @Test("[FILE-SEL-001] workspace selection gestures do not request provider I/O")
+    func workspaceSelectionGesturesDoNotRequestProviderIO() async throws {
+        let fixture = try makeGraphFixture()
+        let provider = fixture.makeProvider()
+        let workspace = RemoteWorkspace(provider: provider)
+        workspace.start()
+        try await waitUntil { workspace.availability == .available }
+        let attemptCount = await provider.recordedAttempts.count
+
+        workspace.clickEntry(fixture.alpha, command: false, shift: false)
+        workspace.clickEntry(fixture.beta, command: true, shift: false)
+        workspace.moveSelectionFocus(by: -1, extending: true)
+        workspace.selectAllVisibleEntries()
+        workspace.clearSelection()
+
+        #expect(await provider.recordedAttempts.count == attemptCount)
+    }
+
+    @Test("[FILE-SEL-001, FILE-STATE-001] hidden child completion after ancestor collapse cannot reselect or render descendant")
+    func hiddenCompletionAfterAncestorCollapseCannotReselectOrRenderDescendant() async throws {
+        let fixture = try makeGraphFixture()
+        let provider = ControllableRemoteFileProvider(honorsTaskCancellation: false)
+        let workspace = RemoteWorkspace(provider: provider)
+        let workListing = try RemoteDirectoryListing(
+            directory: fixture.work,
+            entries: [
+                try RemoteFileEntry(path: fixture.alpha, kind: .directory),
+                try RemoteFileEntry(path: fixture.beta, kind: .directory)
+            ]
+        )
+        let alphaListing = try RemoteDirectoryListing(
+            directory: fixture.alpha,
+            entries: [
+                try RemoteFileEntry(path: fixture.inner, kind: .directory),
+                try RemoteFileEntry(path: fixture.fileA, kind: .regular)
+            ]
+        )
+        let innerListing = try RemoteDirectoryListing(
+            directory: fixture.inner,
+            entries: [try RemoteFileEntry(path: fixture.deep, kind: .regular)]
+        )
+
+        workspace.start()
+        let resolve = await provider.nextAttempt()
+        await provider.succeedResolve(requestID: resolve.requestID, path: fixture.work)
+        let initialList = await provider.nextAttempt()
+        await provider.succeedListing(
+            requestID: initialList.requestID,
+            listing: workListing
+        )
+        try await waitUntil { workspace.availability == .available }
+
+        workspace.setExpanded(fixture.alpha, isExpanded: true)
+        let alphaAttempt = await provider.nextAttempt()
+        await provider.succeedListing(
+            requestID: alphaAttempt.requestID,
+            listing: alphaListing
+        )
+        try await waitUntil {
+            if case .loaded = workspace.directoryStates[fixture.alpha] { return true }
+            return false
+        }
+
+        workspace.setExpanded(fixture.inner, isExpanded: true)
+        let innerAttempt = await provider.nextAttempt()
+        try await waitUntil { workspace.activeRequestCount == 1 }
+        workspace.selectEntry(fixture.fileA)
+        workspace.setExpanded(fixture.alpha, isExpanded: false)
+
+        #expect(workspace.selectedEntry == fixture.alpha)
+        #expect(!workspace.expandedDirectories.contains(fixture.alpha))
+        #expect(workspace.expandedDirectories.contains(fixture.inner))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.fileA))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.deep))
+
+        await provider.succeedListing(
+            requestID: innerAttempt.requestID,
+            listing: innerListing
+        )
+        try await waitUntil { workspace.activeRequestCount == 0 }
+
+        #expect(workspace.selectedEntry == fixture.alpha)
+        #expect(workspace.expandedDirectories.contains(fixture.inner))
+        #expect(!workspace.visibleProjection.rows.map(\.id).contains(.entry(fixture.inner)))
+        #expect(!workspace.visibleProjection.rows.map(\.id).contains(.entry(fixture.deep)))
+        #expect(!workspace.visibleProjection.isSelectable(fixture.deep))
+
+        workspace.setExpanded(fixture.alpha, isExpanded: true)
+        try await waitUntil {
+            if case .loaded = workspace.directoryStates[fixture.alpha] { return true }
+            return false
+        }
+        #expect(workspace.expandedDirectories.contains(fixture.inner))
+        #expect(workspace.visibleProjection.isSelectable(fixture.inner))
+        #expect(workspace.visibleProjection.isSelectable(fixture.deep))
     }
 
     @Test("[FILE-SEL-001] lossy raw descendant paths keep exact byte identity")

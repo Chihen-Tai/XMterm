@@ -44,17 +44,21 @@ its own read-only Remote Workspace in the sidebar: session-owned navigation with
 Back/Forward/Parent/breadcrumbs/Refresh, single selection, lazy directory
 disclosure, honest loading/empty/failed/cancelled states, and exact Copy Path/
 Name/Parent/Shell-Quoted Path actions. Local tabs state plainly that Remote
-Workspace applies to SSH sessions. Because ADR 0007 blocks a safe production SFTP
-transport, the shipping app reports `Remote file transport unavailable` instead of
-fabricating a listing; a deterministic simulated developer fixture exists only
-behind an explicit environment opt-in and is always labeled simulated.
+Workspace applies to SSH sessions. Supported SSH tabs use the production
+dependency-free provider accepted by ADR 0007: an independent noninteractive
+system-OpenSSH subsystem process plus a bounded read-only SFTP v3 codec. The
+terminal remains on its separate interactive PTY SSH process. A deterministic
+simulated developer fixture exists only behind an explicit debug-build environment
+opt-in and is always labeled simulated; release builds ignore the opt-in.
 
-This implemented slice does not include a production remote listing, file
-mutation, transfers, multi-selection, drag-and-drop, local editor sync, reconnect,
-ProxyJump editing, automatic second hops, or distribution approval. Those remain
-roadmap requirements below; the exact Phase 3 packaged-app evidence
+This implemented slice includes real read-only Relay listing, navigation, lazy
+expansion, exact path copying, and isolated per-session teardown. It does not
+include file mutation, transfers, multi-selection, drag-and-drop, local editor
+sync, reconnect, ProxyJump editing, automatic second-hop retargeting, or
+distribution approval. Those remain roadmap requirements below; the exact Phase
+4A evidence
 and manual limitations are recorded in
-[`docs/audits/0005-phase-3-session-manager-evidence.md`](docs/audits/0005-phase-3-session-manager-evidence.md).
+[`docs/audits/0006-phase-4a-remote-workspace-evidence.md`](docs/audits/0006-phase-4a-remote-workspace-evidence.md).
 
 ## Core workflow
 

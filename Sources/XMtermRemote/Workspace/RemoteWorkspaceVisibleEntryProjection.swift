@@ -44,11 +44,15 @@ public struct RemoteWorkspaceVisibleRow: Equatable, Identifiable, Sendable {
 /// already-loaded listings of expanded directories — no provider work, no
 /// recursion beyond the bounded expansion depth, no per-entry task.
 public struct RemoteWorkspaceVisibleEntryProjection: Sendable {
-    /// Kept equal to `RemoteWorkspace.maximumExpandedDirectoryCount`; asserted
-    /// by a dedicated test so the bounds cannot drift apart silently.
-    public static let maximumDepth = 30
+    /// Derived from the workspace's one expansion bound so projection and
+    /// selection validation cannot drift from the state machine limit.
+    public static let maximumDepth = RemoteWorkspace.maximumExpandedDirectoryCount
 
     public let rows: [RemoteWorkspaceVisibleRow]
+    /// The stable order of every selectable row. This is the only ordering used
+    /// by range selection and batch selection; `selectablePaths` is retained for
+    /// membership checks.
+    public let orderedSelectablePaths: [RemotePath]
     public let selectablePaths: Set<RemotePath>
 
     private let entriesByPath: [RemotePath: RemoteFileEntry]
@@ -72,7 +76,11 @@ public struct RemoteWorkspaceVisibleEntryProjection: Sendable {
         }
         self.rows = rows
         self.entriesByPath = entriesByPath
-        selectablePaths = Set(entriesByPath.keys)
+        orderedSelectablePaths = rows.compactMap { row in
+            guard case let .entry(entry, _, _) = row.kind else { return nil }
+            return entry.path
+        }
+        selectablePaths = Set(orderedSelectablePaths)
     }
 
     public func entry(for path: RemotePath) -> RemoteFileEntry? {
