@@ -15,7 +15,10 @@ public protocol RemoteWritableFile: Sendable {
     func close() async throws
 }
 
-public protocol RemoteFileTransferProvider: RemoteFileMutationProvider {
+public protocol RemoteTransferEndpointProvider: RemoteFileMutationProvider {
+    /// Returns exactly the immediate children reported for `path`. Providers do
+    /// not recurse; bounded traversal belongs to the transfer worker.
+    func listDirectory(_ path: RemotePath) async throws -> RemoteDirectoryListing
     func openFileForReading(_ path: RemotePath) async throws -> any RemoteReadableFile
     /// Exclusively creates a new staging file. It never opens, truncates, or
     /// appends to an existing destination.
@@ -24,6 +27,76 @@ public protocol RemoteFileTransferProvider: RemoteFileMutationProvider {
     func close() async
 }
 
-public protocol RemoteTransferProviderFactory: Sendable {
-    func makeProvider() async throws -> any RemoteFileTransferProvider
+public protocol RemoteTransferEndpointProviderFactory: Sendable {
+    /// Creates a fresh provider/channel from one immutable execution snapshot.
+    func makeProvider(
+        for endpoint: RemoteTransferEndpointSnapshot
+    ) async throws -> any RemoteTransferEndpointProvider
+}
+
+@available(*, deprecated, renamed: "RemoteTransferEndpointProvider")
+public typealias RemoteFileTransferProvider = RemoteTransferEndpointProvider
+
+package struct UnavailableRemoteTransferWorkerFactory: RemoteTransferWorkerFactory {
+    package init() {}
+
+    package func makeWorker(
+        for context: RemoteTransferWorkerContext
+    ) async throws -> any RemoteTransferWorker {
+        throw RemoteFileError(
+            category: .transportUnavailable,
+            userFacingMessage: "Remote transfer execution is not available until the reviewed streaming workers are installed."
+        )
+    }
+}
+
+package struct InMemoryRemoteTransferEndpointProviderFactory:
+    RemoteTransferEndpointProviderFactory
+{
+    package typealias ProviderBuilder = @Sendable () throws -> InMemoryRemoteFileProvider
+
+    private let providerBuilder: ProviderBuilder
+    private let factoryID: UUID
+
+    package init(providerBuilder: @escaping ProviderBuilder) {
+        self.providerBuilder = providerBuilder
+        self.factoryID = UUID()
+    }
+
+    package func endpointSnapshot(
+        owner: RemoteTransferOwnerIdentity,
+        displayName: String,
+        id: UUID = UUID()
+    ) throws -> RemoteTransferEndpointSnapshot {
+        try RemoteTransferEndpointSnapshot(
+            id: id,
+            owner: owner,
+            summary: RemoteTransferEndpointSummary(
+                displayName: RemoteTransferPresentationText(displayName),
+                kind: .simulated
+            ),
+            trustedConnectionMaterial: InMemoryRemoteTransferTrustedConnectionMaterial(
+                factoryID: factoryID
+            )
+        )
+    }
+
+    package func makeProvider(
+        for endpoint: RemoteTransferEndpointSnapshot
+    ) async throws -> any RemoteTransferEndpointProvider {
+        guard endpoint.summary.kind == .simulated,
+              let material = endpoint.trustedConnectionMaterial
+                as? InMemoryRemoteTransferTrustedConnectionMaterial,
+              material.factoryID == factoryID else {
+            throw RemoteFileError(category: .invalidOperation)
+        }
+        return try providerBuilder()
+    }
+}
+
+private struct InMemoryRemoteTransferTrustedConnectionMaterial:
+    RemoteTransferTrustedConnectionMaterial
+{
+    let factoryID: UUID
+    let retainedByteCount = MemoryLayout<UUID>.size
 }

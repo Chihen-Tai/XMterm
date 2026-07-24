@@ -11,7 +11,7 @@ struct TerminalWorkspaceRuntimeTests {
     @Test("[FILE-WORKSPACE-001, SESS-011] local launch never constructs a remote workspace")
     func localLaunchExcludesWorkspaceFactory() async throws {
         var workspaceFactoryCalls = 0
-        let store = makeStore {
+        let store = makeStore { _ in
             workspaceFactoryCalls += 1
             return RemoteWorkspace(provider: RuntimeSessionTestRemoteFileProvider())
         }
@@ -32,8 +32,11 @@ struct TerminalWorkspaceRuntimeTests {
     @Test("[FILE-WORKSPACE-001, SESS-007] repeated SSH launches own fresh workspaces")
     func repeatedSSHLaunchesOwnFreshWorkspaces() async throws {
         var createdWorkspaces: [RemoteWorkspace] = []
-        let store = makeStore {
-            let workspace = RemoteWorkspace(provider: RuntimeSessionTestRemoteFileProvider())
+        let store = makeStore { runtimeID in
+            let workspace = RemoteWorkspace(
+                runtimeID: runtimeID,
+                provider: RuntimeSessionTestRemoteFileProvider()
+            )
             createdWorkspaces.append(workspace)
             return workspace
         }
@@ -59,25 +62,29 @@ struct TerminalWorkspaceRuntimeTests {
     @Test("[FILE-WORKSPACE-001, SESS-011] a retained workspace identity cannot be reused")
     func reusedWorkspaceIdentityIsRejectedWithoutClosingOwner() async throws {
         let provider = RuntimeSessionTestRemoteFileProvider()
-        let sharedWorkspace = RemoteWorkspace(provider: provider)
+        var sharedWorkspace: RemoteWorkspace?
         var workspaceFactoryCalls = 0
-        let store = makeStore {
+        let store = makeStore { runtimeID in
             workspaceFactoryCalls += 1
-            return sharedWorkspace
+            if let sharedWorkspace { return sharedWorkspace }
+            let workspace = RemoteWorkspace(runtimeID: runtimeID, provider: provider)
+            sharedWorkspace = workspace
+            return workspace
         }
         let profile = makeProfile(kind: .relaySSH)
 
         #expect(store.openProfile(profile))
+        let ownedWorkspace = try #require(sharedWorkspace)
         let firstTabID = try #require(store.tabsState.selectedTabID)
         let firstRuntime = try #require(store.runtimes[firstTabID])
-        try await eventually { sharedWorkspace.availability == .available }
+        try await eventually { ownedWorkspace.availability == .available }
 
         #expect(!store.openProfile(profile))
         #expect(workspaceFactoryCalls == 2)
         #expect(store.tabs.count == 1)
         #expect(store.runtimes.count == 1)
         #expect(store.runtimes[firstTabID] === firstRuntime)
-        #expect(firstRuntime.remoteWorkspace === sharedWorkspace)
+        #expect(firstRuntime.remoteWorkspace === ownedWorkspace)
         #expect(await provider.snapshot().closeCount == 0)
 
         store.cleanupAllSessions()
@@ -91,7 +98,9 @@ struct TerminalWorkspaceRuntimeTests {
         let provider = RuntimeSessionTestRemoteFileProvider(suspendsClose: true)
         let store = makeStore(
             terminalProcess: terminalProcess,
-            workspaceFactory: { RemoteWorkspace(provider: provider) }
+            workspaceFactory: { runtimeID in
+                RemoteWorkspace(runtimeID: runtimeID, provider: provider)
+            }
         )
         #expect(store.openProfile(makeProfile(kind: .relaySSH)))
         let tabID = try #require(store.tabsState.selectedTabID)
@@ -186,9 +195,12 @@ struct TerminalWorkspaceRuntimeTests {
                     process: process
                 )
             },
-            remoteWorkspaceFactory: { _, _ in
+            remoteWorkspaceFactory: { sessionID, _ in
                 workspaceFactoryCalls += 1
-                return RemoteWorkspace(provider: RuntimeSessionTestRemoteFileProvider())
+                return RemoteWorkspace(
+                    runtimeID: sessionID,
+                    provider: RuntimeSessionTestRemoteFileProvider()
+                )
             }
         )
 
@@ -216,9 +228,12 @@ struct TerminalWorkspaceRuntimeTests {
                 terminal.requestClose()
                 return terminal
             },
-            remoteWorkspaceFactory: { _, _ in
+            remoteWorkspaceFactory: { sessionID, _ in
                 workspaceFactoryCalls += 1
-                return RemoteWorkspace(provider: RuntimeSessionTestRemoteFileProvider())
+                return RemoteWorkspace(
+                    runtimeID: sessionID,
+                    provider: RuntimeSessionTestRemoteFileProvider()
+                )
             }
         )
 
@@ -250,9 +265,9 @@ struct TerminalWorkspaceRuntimeTests {
                     process: process
                 )
             },
-            remoteWorkspaceFactory: { _, _ in
+            remoteWorkspaceFactory: { sessionID, _ in
                 workspaceFactoryCalls += 1
-                return RemoteWorkspace(provider: provider)
+                return RemoteWorkspace(runtimeID: sessionID, provider: provider)
             }
         )
 
@@ -301,8 +316,8 @@ struct TerminalWorkspaceRuntimeTests {
                     process: process
                 )
             },
-            remoteWorkspaceFactory: { _, _ in
-                RemoteWorkspace(provider: provider)
+            remoteWorkspaceFactory: { sessionID, _ in
+                RemoteWorkspace(runtimeID: sessionID, provider: provider)
             }
         )
 
@@ -489,8 +504,11 @@ struct TerminalWorkspaceRuntimeTests {
                     process: terminalProcesses.removeFirst()
                 )
             },
-            remoteWorkspaceFactory: { _, _ in
-                RemoteWorkspace(provider: providers.removeFirst())
+            remoteWorkspaceFactory: { sessionID, _ in
+                RemoteWorkspace(
+                    runtimeID: sessionID,
+                    provider: providers.removeFirst()
+                )
             }
         )
 
@@ -559,7 +577,7 @@ struct TerminalWorkspaceRuntimeTests {
 
     private func makeStore(
         terminalProcess: RuntimeSessionTestTerminalProcess = RuntimeSessionTestTerminalProcess(),
-        workspaceFactory: @escaping @MainActor () -> RemoteWorkspace
+        workspaceFactory: @escaping @MainActor (TerminalSessionID) -> RemoteWorkspace
     ) -> TerminalWorkspaceStore {
         var nextIdentity = 1
         return TerminalWorkspaceStore(
@@ -580,7 +598,7 @@ struct TerminalWorkspaceRuntimeTests {
                     process: terminalProcess
                 )
             },
-            remoteWorkspaceFactory: { _, _ in workspaceFactory() }
+            remoteWorkspaceFactory: { sessionID, _ in workspaceFactory(sessionID) }
         )
     }
 

@@ -160,13 +160,24 @@ final class TerminalWorkspaceStore {
                 launchSpecification: specification
             )
         },
-        remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { _, specification in
+        remoteWorkspaceFactory: @escaping RemoteWorkspaceFactory = { sessionID, specification in
+            let workspaceID = RemoteWorkspaceID()
+            let owner = RemoteTransferOwnerIdentity(
+                runtimeID: sessionID,
+                workspaceID: workspaceID
+            )
             guard case .ssh(let profile) = specification.target else {
-                return RemoteWorkspace(composition: .unavailable())
+                return RemoteWorkspace(
+                    id: workspaceID,
+                    composition: .unavailable(owner: owner)
+                )
             }
             return RemoteWorkspace(
+                id: workspaceID,
                 composition: RemoteWorkspaceProductionComposition.composition(
-                    for: profile
+                    for: profile,
+                    owner: owner,
+                    displayName: specification.initialTitle
                 )
             )
         }
@@ -191,10 +202,19 @@ final class TerminalWorkspaceStore {
             sessionFactory: { sessionID, specification in
                 sessionFactory(sessionID.rawValue, specification.kind)
             },
-            remoteWorkspaceFactory: { _, _ in
+            remoteWorkspaceFactory: { sessionID, _ in
                 // Legacy/test-only factory callers do not provide a validated SSH
                 // launch profile for production transport composition.
-                RemoteWorkspace(composition: .unavailable())
+                let workspaceID = RemoteWorkspaceID()
+                return RemoteWorkspace(
+                    id: workspaceID,
+                    composition: .unavailable(
+                        owner: RemoteTransferOwnerIdentity(
+                            runtimeID: sessionID,
+                            workspaceID: workspaceID
+                        )
+                    )
+                )
             }
         )
     }

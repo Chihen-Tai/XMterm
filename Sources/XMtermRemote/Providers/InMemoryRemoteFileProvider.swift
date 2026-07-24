@@ -1,6 +1,6 @@
 import Foundation
 
-public actor InMemoryRemoteFileProvider: RemoteFileProvider, RemoteFileTransferProvider {
+public actor InMemoryRemoteFileProvider: RemoteFileProvider, RemoteTransferEndpointProvider {
     public static let maximumEstimatedListingPayloadByteCount = 32 * 1_024 * 1_024
 
     public struct Directory: Equatable, Sendable {

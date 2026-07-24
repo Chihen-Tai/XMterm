@@ -1,4 +1,5 @@
 import Foundation
+import XMtermCore
 import XMtermRemote
 
 /// Explicit, opt-in developer injection for packaged-app foundation verification.
@@ -28,18 +29,31 @@ enum RemoteWorkspaceDeveloperFixture {
     }
 
     static func composition(
+        owner: RemoteTransferOwnerIdentity = RemoteTransferOwnerIdentity(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        ),
+        displayName: String = "Simulated transfer endpoint",
         environment: [String: String] = ProcessInfo.processInfo.environment,
         isDeveloperBuild: Bool = Self.isDeveloperBuild
     ) -> RemoteProviderComposition {
         guard isDeveloperBuild, isEnabled(environment: environment) else {
-            return .unavailable()
+            return .unavailable(owner: owner)
         }
         do {
-            return .simulatedDeveloperFixture(try simulatedProvider())
+            let endpointProviderFactory = InMemoryRemoteTransferEndpointProviderFactory {
+                try simulatedProvider()
+            }
+            return try .simulatedDeveloperFixture(
+                simulatedProvider(),
+                owner: owner,
+                endpointProviderFactory: endpointProviderFactory,
+                displayName: displayName
+            )
         } catch {
             // Fail closed into the honest transport-unavailable state rather than
             // presenting a partially built simulated graph.
-            return .unavailable()
+            return .unavailable(owner: owner)
         }
     }
 

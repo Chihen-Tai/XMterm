@@ -13,6 +13,11 @@ public final class RemoteWorkspace {
   public static let maximumScrollRestorationTokenByteCount =
     RemoteWorkspaceHistoryPolicy.maximumScrollRestorationTokenByteCount
   public let id: RemoteWorkspaceID
+  public let transferOwner: RemoteTransferOwnerIdentity
+  package let transferEndpoint: RemoteTransferEndpointSnapshot?
+  public let transfers: RemoteTransferCoordinator
+  package let transferEndpointProviderFactory:
+    (any RemoteTransferEndpointProviderFactory)?
   /// Trusted composition-assigned provider classification. Immutable for the
   /// workspace's lifetime; provider responses cannot change it.
   public let providerMode: RemoteProviderMode
@@ -54,11 +59,33 @@ public final class RemoteWorkspace {
   @ObservationIgnored private var activeRequests: [RemotePath: RemoteWorkspaceActiveRequest] = [:]
   @ObservationIgnored private var directoryStateOrder: [RemotePath] = []
   public init(
-    id: RemoteWorkspaceID = RemoteWorkspaceID(),
+    id: RemoteWorkspaceID? = nil,
     composition: RemoteProviderComposition,
     directoryCache: RemoteDirectoryCache = RemoteDirectoryCache()
   ) {
-    self.id = id
+    let resolvedID = id ?? composition.transferOwner.workspaceID
+    let ownerMatchesWorkspace = composition.transferOwner.workspaceID == resolvedID
+    let resolvedOwner = ownerMatchesWorkspace
+      ? composition.transferOwner
+      : RemoteTransferOwnerIdentity(
+        runtimeID: composition.transferOwner.runtimeID,
+        workspaceID: resolvedID
+      )
+    let workerFactory: any RemoteTransferWorkerFactory = ownerMatchesWorkspace
+      ? composition.transferWorkerFactory
+      : UnavailableRemoteTransferWorkerFactory()
+    self.id = resolvedID
+    self.transferOwner = resolvedOwner
+    self.transferEndpoint = ownerMatchesWorkspace
+      ? composition.transferEndpoint
+      : nil
+    self.transferEndpointProviderFactory = ownerMatchesWorkspace
+      ? composition.transferEndpointProviderFactory
+      : nil
+    self.transfers = RemoteTransferCoordinator(
+      owner: resolvedOwner,
+      workerFactory: workerFactory
+    )
     self.provider = composition.provider
     self.providerMode = composition.mode
     self.directoryCache = directoryCache
@@ -262,7 +289,10 @@ public final class RemoteWorkspace {
       pendingNavigationGeneration = nil
       pendingRefreshGeneration = nil
       let provider = provider
+      let transfers = transfers
+      transfers.beginClosing()
       closeTask = Task {
+        await transfers.close()
         await RemoteWorkspaceProviderOperations.settleClose(
           provider: provider,
           activeTasks: activeTasks

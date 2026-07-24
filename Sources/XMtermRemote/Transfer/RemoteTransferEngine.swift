@@ -1,57 +1,34 @@
 import Foundation
-
 public actor RemoteTransferEngine {
-    public static let maximumNonterminalJobCount = 1_000
-    public static let maximumTerminalRecordCount = 500
+    public static let maximumNonterminalJobCount = RemoteTransferBounds.maximumNonterminalJobs
+    public static let maximumTerminalRecordCount = RemoteTransferBounds.maximumTerminalRecords
     public static let maximumActiveWorkerCount = 2
-    public static let maximumLogicalItemCount = 20_000
+    public static let maximumLogicalItemCount = RemoteTransferBounds.maximumTopLevelRequestedItemsPerJob
     public static let minimumProgressPublicationIntervalNanoseconds: UInt64 = 100_000_000
 
     public typealias Publication = @MainActor @Sendable ([RemoteTransferJobSnapshot]) -> Void
-
-    private struct JobRecord {
-        let id: UUID
+    struct JobRecord {
         let sequence: UInt64
         let request: RemoteTransferRequest
-        var attemptID: UUID
-        var attemptHistory: Set<UUID>
+        var attempt: RemoteTransferAttemptIdentity
         var attemptItems: [RemoteTransferAttemptItem]
-        var completedLogicalItems: Set<RemoteTransferLogicalItemKey>
-        var state: RemoteTransferJobState
-        var runningPhase: RemoteTransferRunningPhase?
-        var bytesCompleted: UInt64
-        var bytesTotal: UInt64?
-        var itemsCompleted: Int
-        var itemsTotal: Int?
-        var itemFailures: [RemoteTransferItemFailure]
+        var checkpointManifest: RemoteTransferCheckpointManifest
         var collision: RemoteTransferCollision?
-        var collisionResolution: RemoteTransferCollisionResolution?
-        var applyToAllDecision: RemoteTransferCollisionDecision?
+        var resolvedCollision: RemoteTransferResolvedCollision?
+        var applyToAllResolution: RemoteTransferCollisionResolution?
         var requiresDestinationRevalidation: Bool
         var lastProgressPublicationNanoseconds: UInt64?
         var terminalSequence: UInt64?
+        var settlementFailure: RemoteFileError?
+        var snapshot: RemoteTransferJobSnapshot
 
-        var snapshot: RemoteTransferJobSnapshot {
-            RemoteTransferJobSnapshot(
-                id: id,
-                attemptID: attemptID,
-                state: state,
-                runningPhase: runningPhase,
-                bytesCompleted: bytesCompleted,
-                bytesTotal: bytesTotal,
-                itemsCompleted: itemsCompleted,
-                itemsTotal: itemsTotal,
-                itemFailures: itemFailures,
-                collision: collision
-            )
-        }
+        var id: UUID { request.id }
     }
 
     private struct ActiveWorker {
-        let attemptID: UUID
-        let task: Task<Void, Never>
+        let attempt: RemoteTransferAttemptIdentity
+        var task: Task<Void, Never>?
     }
-
     private let workerFactory: any RemoteTransferWorkerFactory
     private let identifierGenerator: any RemoteTransferIdentifierGenerator
     private let clock: any RemoteTransferClock
@@ -64,7 +41,6 @@ public actor RemoteTransferEngine {
     private var nextSequence: UInt64 = 0
     private var nextTerminalSequence: UInt64 = 0
     private var isShuttingDown = false
-
     public init(
         workerFactory: any RemoteTransferWorkerFactory,
         identifierGenerator: any RemoteTransferIdentifierGenerator = SystemRemoteTransferIdentifierGenerator(),
@@ -82,50 +58,53 @@ public actor RemoteTransferEngine {
         guard !isShuttingDown else {
             throw RemoteTransferEngineError.invalidState
         }
-        try validate(request)
+        try RemoteTransferEnginePolicy.validate(request)
+        guard records[request.id] == nil else {
+            throw RemoteTransferEngineError.identifierCollision
+        }
         guard nonterminalRecordCount + pendingAdmissions < Self.maximumNonterminalJobCount else {
             throw RemoteTransferEngineError.queueCapacityExceeded
         }
         pendingAdmissions += 1
         defer { pendingAdmissions -= 1 }
 
-        let jobID = await identifierGenerator.nextIdentifier()
-        let attemptID = await identifierGenerator.nextIdentifier()
+        let attempt = try RemoteTransferAttemptIdentity(
+            id: await identifierGenerator.nextIdentifier(),
+            generation: 1
+        )
         let attemptItems = try await makeAttemptItems(for: request.logicalItemKeys)
+        let now = await clock.nowNanoseconds()
         guard !isShuttingDown else {
             throw RemoteTransferEngineError.invalidState
         }
-        guard records[jobID] == nil else {
+        guard records[request.id] == nil else {
             throw RemoteTransferEngineError.identifierCollision
         }
-        let sequence = try takeNextSequence()
-        let record = JobRecord(
-            id: jobID,
-            sequence: sequence,
+        let snapshot = try RemoteTransferSnapshotProjection.initial(
             request: request,
-            attemptID: attemptID,
-            attemptHistory: [attemptID],
+            attempt: attempt,
+            now: now
+        )
+        let record = JobRecord(
+            sequence: try takeNextSequence(),
+            request: request,
+            attempt: attempt,
             attemptItems: attemptItems,
-            completedLogicalItems: [],
-            state: .queued,
-            runningPhase: nil,
-            bytesCompleted: 0,
-            bytesTotal: nil,
-            itemsCompleted: 0,
-            itemsTotal: nil,
-            itemFailures: [],
+            checkpointManifest: .empty,
             collision: nil,
-            collisionResolution: nil,
-            applyToAllDecision: nil,
+            resolvedCollision: nil,
+            applyToAllResolution: nil,
             requiresDestinationRevalidation: false,
             lastProgressPublicationNanoseconds: nil,
-            terminalSequence: nil
+            terminalSequence: nil,
+            settlementFailure: nil,
+            snapshot: snapshot
         )
-        records = records.merging([jobID: record]) { _, new in new }
-        queue = insertingInOriginalOrder(jobID, into: queue)
+        try commit(record)
+        queue = insertingInOriginalOrder(request.id, into: queue)
         await publishSnapshots()
         await pumpQueue()
-        return jobID
+        return request.id
     }
 
     public func snapshots() -> [RemoteTransferJobSnapshot] {
@@ -134,57 +113,109 @@ public actor RemoteTransferEngine {
 
     public func resolveCollision(
         jobID: UUID,
+        attempt: RemoteTransferAttemptIdentity,
         resolution: RemoteTransferCollisionResolution
     ) async throws {
         guard var record = records[jobID] else {
             throw RemoteTransferEngineError.jobNotFound
         }
-        guard record.state == .conflict, record.collision != nil else {
+        guard record.attempt == attempt,
+              record.snapshot.state == .conflict,
+              record.collision != nil else {
             throw RemoteTransferEngineError.invalidState
         }
         if resolution.decision == .cancel {
             await cancel(jobID: jobID)
             return
         }
-        record.state = .queued
-        record.runningPhase = nil
+        let now = await clock.nowNanoseconds()
+        guard let current = records[jobID],
+              current.attempt == attempt,
+              current.snapshot.state == .conflict,
+              let collision = current.collision else {
+            throw RemoteTransferEngineError.invalidState
+        }
+        record = current
+        let resolvedCollision = RemoteTransferResolvedCollision(
+            collision: collision,
+            resolution: resolution
+        )
         record.collision = nil
-        record.collisionResolution = resolution
+        record.resolvedCollision = resolvedCollision
         record.requiresDestinationRevalidation = true
         if resolution.applyToAll {
-            record.applyToAllDecision = resolution.decision
+            record.applyToAllResolution = resolution
         }
-        records = records.merging([jobID: record]) { _, new in new }
+        record.snapshot = try record.projectedSnapshot(
+            state: .queued,
+            runningPhase: nil,
+            collision: nil,
+            canRetry: false,
+            now: now,
+            settled: false
+        )
+        try commit(record)
         queue = insertingInOriginalOrder(jobID, into: queue)
         await publishSnapshots()
         await pumpQueue()
     }
 
     public func cancel(jobID: UUID) async {
-        guard var record = records[jobID], !record.state.isTerminal else { return }
-        if record.state == .cancelling {
-            if let active = activeWorkers[jobID], active.attemptID == record.attemptID {
-                await active.task.value
+        guard var record = records[jobID], !record.snapshot.state.isTerminal else { return }
+        if record.snapshot.state == .cancelling {
+            if let active = activeWorkers[jobID],
+               active.attempt == record.attempt,
+               let task = active.task {
+                await task.value
             } else {
-                await settleInactiveCancellation(jobID: jobID, attemptID: record.attemptID)
+                await settleInactiveCancellation(jobID: jobID, attempt: record.attempt)
             }
             return
         }
 
-        record.state = .cancelling
-        record.runningPhase = nil
-        record.collision = nil
-        records = records.merging([jobID: record]) { _, new in new }
-        queue = queue.filter { $0 != jobID }
-        let active = activeWorkers[jobID]
-        active?.task.cancel()
-        await publishSnapshots()
-
-        if let active, active.attemptID == record.attemptID {
-            await active.task.value
+        let attempt = record.attempt
+        let now = await clock.nowNanoseconds()
+        guard let current = records[jobID],
+              current.attempt == attempt,
+              !current.snapshot.state.isTerminal else { return }
+        record = current
+        if record.snapshot.state == .cancelling {
+            if let task = activeWorkers[jobID]?.task {
+                await task.value
+            } else {
+                await settleInactiveCancellation(jobID: jobID, attempt: attempt)
+            }
             return
         }
-        await settleInactiveCancellation(jobID: jobID, attemptID: record.attemptID)
+        record.collision = nil
+        do {
+            record.snapshot = try record.projectedSnapshot(
+                state: .cancelling,
+                runningPhase: nil,
+                collision: nil,
+                canRetry: false,
+                now: now,
+                settled: false
+            )
+            try commit(record)
+        } catch {
+            await beginForcedSettlement(
+                jobID: jobID,
+                attempt: record.attempt,
+                error: RemoteTransferEnginePolicy.normalized(error)
+            )
+            return
+        }
+        queue = queue.filter { $0 != jobID }
+        let active = activeWorkers[jobID]
+        active?.task?.cancel()
+        await publishSnapshots()
+
+        if let active, active.attempt == record.attempt, let task = active.task {
+            await task.value
+        } else {
+            await settleInactiveCancellation(jobID: jobID, attempt: record.attempt)
+        }
     }
 
     public func retry(jobID: UUID) async throws {
@@ -198,178 +229,217 @@ public actor RemoteTransferEngine {
             throw RemoteTransferEngineError.invalidState
         }
         defer { retryReservations.remove(jobID) }
-        guard isRetryable(record.state) else {
+        guard RemoteTransferEnginePolicy.isRetryable(record.snapshot.state) else {
             throw RemoteTransferEngineError.invalidState
         }
-        guard nonterminalRecordCount + pendingAdmissions < Self.maximumNonterminalJobCount else {
-            throw RemoteTransferEngineError.queueCapacityExceeded
+        guard record.checkpointManifest.cleanupEntries.isEmpty else {
+            throw RemoteTransferEngineError.invalidState
         }
-        let remainingKeys = record.request.logicalItemKeys.filter {
-            !record.completedLogicalItems.contains($0)
-        }
+
+        let remainingKeys = RemoteTransferEnginePolicy.retryableTopLevelKeys(
+            request: record.request,
+            manifest: record.checkpointManifest
+        )
         guard !remainingKeys.isEmpty else {
             throw RemoteTransferEngineError.invalidState
         }
-        pendingAdmissions += 1
-        defer { pendingAdmissions -= 1 }
-
-        let attemptID = await identifierGenerator.nextIdentifier()
-        guard !record.attemptHistory.contains(attemptID) else {
-            throw RemoteTransferEngineError.identifierCollision
-        }
+        let previousAttempt = record.attempt
+        let nextAttempt = try previousAttempt.nextAttempt(
+            id: await identifierGenerator.nextIdentifier()
+        )
         let attemptItems = try await makeAttemptItems(for: remainingKeys)
+        let now = await clock.nowNanoseconds()
         guard !isShuttingDown,
-              let current = records[jobID], current.attemptID == record.attemptID,
-              current.state == record.state else {
+              let current = records[jobID],
+              current.attempt == previousAttempt,
+              current.snapshot.state == record.snapshot.state else {
             throw RemoteTransferEngineError.invalidState
         }
         record = current
-        record.attemptID = attemptID
-        record.attemptHistory = record.attemptHistory.union([attemptID])
-        record.attemptItems = attemptItems
-        record.state = .queued
-        record.runningPhase = nil
-        record.bytesCompleted = 0
-        record.bytesTotal = nil
-        record.itemsCompleted = 0
-        record.itemsTotal = nil
-        record.itemFailures = []
-        record.collision = nil
-        record.collisionResolution = nil
-        record.requiresDestinationRevalidation = true
-        record.lastProgressPublicationNanoseconds = nil
-        record.terminalSequence = nil
-        records = records.merging([jobID: record]) { _, new in new }
+        try record.resetForRetry(
+            attempt: nextAttempt,
+            items: attemptItems,
+            now: now
+        )
+        try commit(record)
         queue = insertingInOriginalOrder(jobID, into: queue)
         await publishSnapshots()
         await pumpQueue()
     }
 
     public func clearTerminalRecords() async {
-        let terminalIDs = Set(records.values.filter { $0.state.isTerminal }.map(\.id))
-        records = records.filter { !terminalIDs.contains($0.key) }
+        records = records.filter { !$0.value.snapshot.state.isTerminal }
         await publishSnapshots()
     }
 
     public func cancelAllAndSettle() async {
         if !isShuttingDown {
             isShuttingDown = true
-            let targets = orderedRecords.filter { !$0.state.isTerminal }.map(\.id)
+            let targets = orderedRecords.filter { !$0.snapshot.state.isTerminal }.map(\.id)
             for jobID in targets {
-                guard var record = records[jobID] else { continue }
-                record.state = .cancelling
-                record.runningPhase = nil
+                let now = await clock.nowNanoseconds()
+                guard var record = records[jobID],
+                      !record.snapshot.state.isTerminal else { continue }
                 record.collision = nil
-                records = records.merging([jobID: record]) { _, new in new }
+                do {
+                    record.snapshot = try record.projectedSnapshot(
+                        state: .cancelling,
+                        runningPhase: nil,
+                        collision: nil,
+                        canRetry: false,
+                        now: now,
+                        settled: false
+                    )
+                    try commit(record)
+                } catch {
+                    record.settlementFailure = RemoteTransferEnginePolicy.normalized(error)
+                    records[jobID] = record
+                }
             }
             queue = []
-            activeWorkers.values.forEach { $0.task.cancel() }
+            activeWorkers.values.forEach { $0.task?.cancel() }
             await publishSnapshots()
         }
 
-        let active = activeWorkers.values.map { $0 }
-        active.forEach { $0.task.cancel() }
-        for worker in active {
-            await worker.task.value
+        let activeTasks = activeWorkers.values.compactMap(\.task)
+        activeTasks.forEach { $0.cancel() }
+        for task in activeTasks {
+            await task.value
         }
-        let unsettled = orderedRecords.filter { $0.state == .cancelling }
+        let unsettled = orderedRecords.filter { $0.snapshot.state == .cancelling }
         for record in unsettled {
-            let jobID = record.id
-            guard let record = records[jobID], record.state == .cancelling else { continue }
-            await settleInactiveCancellation(jobID: jobID, attemptID: record.attemptID)
+            await settleInactiveCancellation(jobID: record.id, attempt: record.attempt)
         }
     }
 
     func receive(
         _ event: RemoteTransferWorkerEvent,
         jobID: UUID,
-        attemptID: UUID
+        attempt: RemoteTransferAttemptIdentity
     ) async {
         guard var record = records[jobID],
-              record.attemptID == attemptID,
-              activeWorkers[jobID]?.attemptID == attemptID,
-              record.state != .cancelling,
-              !record.state.isTerminal else {
+              record.attempt == attempt,
+              activeWorkers[jobID]?.attempt == attempt,
+              record.snapshot.state != .cancelling,
+              !record.snapshot.state.isTerminal else {
             return
         }
 
-        switch event {
-        case let .phase(phase):
-            let changed = record.state != .running || record.runningPhase != phase
-            record.state = .running
-            record.runningPhase = phase
-            records = records.merging([jobID: record]) { _, new in new }
-            if changed {
+        do {
+            switch event {
+            case let .phase(phase):
+                let changed = record.snapshot.state != .running
+                    || record.snapshot.runningPhase != phase
+                guard changed else { return }
+                let now = await clock.nowNanoseconds()
+                guard let current = activeRecord(jobID: jobID, attempt: attempt) else { return }
+                record = current
+                guard record.snapshot.state != .running
+                    || record.snapshot.runningPhase != phase else { return }
+                record.snapshot = try record.projectedSnapshot(
+                    state: .running,
+                    runningPhase: phase,
+                    collision: nil,
+                    canRetry: false,
+                    now: now,
+                    settled: false
+                )
+                try commit(record)
                 await publishSnapshots()
-            }
 
-        case let .progress(bytesCompleted, bytesTotal, itemsCompleted, itemsTotal):
-            let now = await clock.nowNanoseconds()
-            guard var record = records[jobID],
-                  record.attemptID == attemptID,
-                  activeWorkers[jobID]?.attemptID == attemptID,
-                  record.state != .cancelling,
-                  !record.state.isTerminal else {
-                return
+            case let .currentItem(currentItem):
+                guard record.snapshot.currentItemDisplay != currentItem else { return }
+                let now = await clock.nowNanoseconds()
+                guard let current = activeRecord(jobID: jobID, attempt: attempt) else { return }
+                record = current
+                guard record.snapshot.currentItemDisplay != currentItem else { return }
+                let intervalElapsed = record.lastProgressPublicationNanoseconds.map {
+                    now >= $0 && now - $0 >= Self.minimumProgressPublicationIntervalNanoseconds
+                } ?? true
+                if intervalElapsed {
+                    record.lastProgressPublicationNanoseconds = now
+                }
+                record.snapshot = try record.projectedSnapshot(
+                    state: record.snapshot.state,
+                    runningPhase: record.snapshot.runningPhase,
+                    currentItemDisplay: currentItem,
+                    collision: record.snapshot.collision,
+                    canRetry: false,
+                    now: now,
+                    settled: false
+                )
+                try commit(record)
+                if intervalElapsed {
+                    await publishSnapshots()
+                }
+
+            case let .progress(bytesCompleted, bytesTotal, itemsCompleted, itemsTotal):
+                try await receiveProgress(
+                    record: &record,
+                    bytesCompleted: bytesCompleted,
+                    bytesTotal: bytesTotal,
+                    itemsCompleted: itemsCompleted,
+                    itemsTotal: itemsTotal
+                )
             }
-            let previousBytes = record.bytesCompleted
-            let previousItems = record.itemsCompleted
-            let previousBytesTotal = record.bytesTotal
-            let previousItemsTotal = record.itemsTotal
-            record.bytesCompleted = max(previousBytes, bytesCompleted)
-            record.itemsCompleted = max(previousItems, max(0, itemsCompleted))
-            record.bytesTotal = monotonicTotal(
-                previous: previousBytesTotal,
-                proposed: bytesTotal,
-                completed: record.bytesCompleted
+        } catch {
+            await beginForcedSettlement(
+                jobID: jobID,
+                attempt: attempt,
+                error: RemoteTransferEnginePolicy.normalized(error)
             )
-            record.itemsTotal = monotonicTotal(
-                previous: previousItemsTotal,
-                proposed: itemsTotal.map { max(0, $0) },
-                completed: record.itemsCompleted
-            )
-            let hasNonByteEdge = record.itemsCompleted != previousItems
-                || record.bytesTotal != previousBytesTotal
-                || record.itemsTotal != previousItemsTotal
-            guard record.bytesCompleted != previousBytes || hasNonByteEdge else { return }
-            let intervalElapsed = record.lastProgressPublicationNanoseconds.map {
-                now >= $0 && now - $0 >= Self.minimumProgressPublicationIntervalNanoseconds
-            } ?? true
-            let shouldPublish = hasNonByteEdge || intervalElapsed
-            if shouldPublish {
-                record.lastProgressPublicationNanoseconds = now
-            }
-            records = records.merging([jobID: record]) { _, new in new }
-            if shouldPublish {
-                await publishSnapshots()
-            }
         }
     }
 
     func finish(
         _ outcome: RemoteTransferWorkerOutcome,
         jobID: UUID,
-        attemptID: UUID
+        attempt: RemoteTransferAttemptIdentity
     ) async {
         guard var record = records[jobID],
-              record.attemptID == attemptID,
-              activeWorkers[jobID]?.attemptID == attemptID else {
+              record.attempt == attempt,
+              activeWorkers[jobID]?.attempt == attempt else {
             return
         }
         activeWorkers = activeWorkers.filter { key, value in
-            key != jobID || value.attemptID != attemptID
+            key != jobID || value.attempt != attempt
         }
+        let now = await clock.nowNanoseconds()
+        guard let current = records[jobID],
+              current.attempt == attempt,
+              !current.snapshot.state.isTerminal else {
+            await pumpQueue()
+            return
+        }
+        record = current
 
-        if record.state == .cancelling {
-            record.completedLogicalItems = record.completedLogicalItems.union(
-                completedItems(from: outcome).intersection(record.request.logicalItemKeys)
+        do {
+            if let settlementFailure = record.settlementFailure {
+                try markTerminal(
+                    &record,
+                    state: .failed(settlementFailure),
+                    itemFailures: [],
+                    now: now
+                )
+            } else if record.snapshot.state == .cancelling {
+                record.checkpointManifest = try RemoteTransferEnginePolicy.mergedManifest(
+                    from: outcome,
+                    request: record.request,
+                    attempt: record.attempt
+                )
+                try markTerminal(&record, state: .cancelled, itemFailures: [], now: now)
+            } else {
+                try apply(outcome, to: &record, now: now)
+            }
+            try commit(record, shouldTrimTerminalRecords: record.snapshot.state.isTerminal)
+        } catch {
+            record = records[jobID] ?? record
+            installFailClosed(
+                record,
+                error: RemoteTransferEnginePolicy.failClosedError(error),
+                now: now
             )
-            markTerminal(&record, state: .cancelled)
-        } else {
-            apply(outcome, to: &record)
         }
-        records = records.merging([jobID: record]) { _, new in new }
-        trimTerminalRecords()
         await publishSnapshots()
         await pumpQueue()
     }
@@ -379,20 +449,7 @@ public actor RemoteTransferEngine {
     }
 
     private var nonterminalRecordCount: Int {
-        records.values.lazy.filter { !$0.state.isTerminal }.count
-    }
-
-    private func isRetryable(_ state: RemoteTransferJobState) -> Bool {
-        if case .failed = state { return true }
-        return state == .cancelled
-    }
-
-    private func validate(_ request: RemoteTransferRequest) throws {
-        guard !request.logicalItemKeys.isEmpty,
-              request.logicalItemKeys.count <= Self.maximumLogicalItemCount,
-              Set(request.logicalItemKeys).count == request.logicalItemKeys.count else {
-            throw RemoteTransferEngineError.invalidRequest
-        }
+        records.values.lazy.filter { !$0.snapshot.state.isTerminal }.count
     }
 
     private func makeAttemptItems(
@@ -417,12 +474,23 @@ public actor RemoteTransferEngine {
     }
 
     private func takeNextSequence() throws -> UInt64 {
-        guard nextSequence < UInt64.max else {
-            throw RemoteTransferEngineError.queueCapacityExceeded
+        let result = nextSequence.addingReportingOverflow(1)
+        guard !result.overflow else {
+            throw RemoteFileError(category: .limitExceeded)
         }
-        let result = nextSequence
-        nextSequence += 1
-        return result
+        let current = nextSequence
+        nextSequence = result.partialValue
+        return current
+    }
+
+    private func takeNextTerminalSequence() throws -> UInt64 {
+        let result = nextTerminalSequence.addingReportingOverflow(1)
+        guard !result.overflow else {
+            throw RemoteFileError(category: .limitExceeded)
+        }
+        let current = nextTerminalSequence
+        nextTerminalSequence = result.partialValue
+        return current
     }
 
     private func insertingInOriginalOrder(_ jobID: UUID, into queue: [UUID]) -> [UUID] {
@@ -436,136 +504,280 @@ public actor RemoteTransferEngine {
         while activeWorkers.count < Self.maximumActiveWorkerCount,
               let jobID = queue.first {
             queue = Array(queue.dropFirst())
-            guard var record = records[jobID], record.state == .queued else { continue }
+            guard var record = records[jobID], record.snapshot.state == .queued else { continue }
+            let now = await clock.nowNanoseconds()
+            guard !isShuttingDown else { return }
+            guard let current = records[jobID],
+                  current.attempt == record.attempt,
+                  current.snapshot.state == .queued else { continue }
+            guard activeWorkers.count < Self.maximumActiveWorkerCount else {
+                queue = insertingInOriginalOrder(jobID, into: queue)
+                return
+            }
+            record = current
             let context = RemoteTransferWorkerContext(
-                jobID: record.id,
-                attemptID: record.attemptID,
+                request: record.request,
+                attempt: record.attempt,
                 items: record.attemptItems,
-                excludedCompletedItems: record.request.logicalItemKeys.filter {
-                    record.completedLogicalItems.contains($0)
-                },
-                collisionResolution: record.collisionResolution,
-                applyToAllDecision: record.applyToAllDecision,
+                checkpointManifest: record.checkpointManifest,
+                resolvedCollision: record.resolvedCollision,
+                applyToAllResolution: record.applyToAllResolution,
                 requiresDestinationRevalidation: record.requiresDestinationRevalidation
             )
-            record.state = .preparing
-            record.runningPhase = nil
-            record.collisionResolution = nil
-            record.requiresDestinationRevalidation = false
-            records = records.merging([jobID: record]) { _, new in new }
+            do {
+                record.snapshot = try record.projectedSnapshot(
+                    state: .preparing,
+                    runningPhase: nil,
+                    collision: nil,
+                    canRetry: false,
+                    now: now,
+                    settled: false,
+                    starting: true
+                )
+                record.resolvedCollision = nil
+                record.requiresDestinationRevalidation = false
+                try commit(record)
+            } catch {
+                installFailClosed(
+                    record,
+                    error: RemoteTransferEnginePolicy.failClosedError(error),
+                    now: now
+                )
+                await publishSnapshots()
+                continue
+            }
 
             let factory = workerFactory
+            activeWorkers[jobID] = ActiveWorker(attempt: record.attempt, task: nil)
             let task = Task { [self] in
                 let outcome: RemoteTransferWorkerOutcome
                 do {
                     let worker = try await factory.makeWorker(for: context)
                     outcome = await worker.run { [self] event in
-                        await receive(event, jobID: context.jobID, attemptID: context.attemptID)
+                        await receive(event, jobID: context.jobID, attempt: context.attempt)
                     }
                 } catch is CancellationError {
-                    outcome = .cancelled(completedItems: [])
+                    outcome = .cancelled(
+                        completedItems: [],
+                        checkpointManifest: context.checkpointManifest
+                    )
                 } catch let error as RemoteFileError {
-                    outcome = .failed(error: error, itemFailures: [], completedItems: [])
+                    outcome = .failed(
+                        error: error,
+                        itemFailures: [],
+                        completedItems: [],
+                        checkpointManifest: context.checkpointManifest
+                    )
                 } catch {
                     outcome = .failed(
                         error: RemoteFileError(category: .providerFailure),
                         itemFailures: [],
-                        completedItems: []
+                        completedItems: [],
+                        checkpointManifest: context.checkpointManifest
                     )
                 }
-                await finish(outcome, jobID: context.jobID, attemptID: context.attemptID)
+                await finish(outcome, jobID: context.jobID, attempt: context.attempt)
             }
-            activeWorkers = activeWorkers.merging([
-                jobID: ActiveWorker(attemptID: record.attemptID, task: task)
-            ]) { _, new in new }
+            activeWorkers[jobID]?.task = task
             await publishSnapshots()
         }
     }
 
-    private func settleInactiveCancellation(jobID: UUID, attemptID: UUID) async {
+    private func receiveProgress(
+        record: inout JobRecord,
+        bytesCompleted: UInt64,
+        bytesTotal: UInt64?,
+        itemsCompleted: Int,
+        itemsTotal: Int?
+    ) async throws {
+        let now = await clock.nowNanoseconds()
+        guard let current = records[record.id],
+              current.attempt == record.attempt,
+              activeWorkers[record.id]?.attempt == record.attempt,
+              current.snapshot.state != .cancelling,
+              !current.snapshot.state.isTerminal else {
+            return
+        }
+        record = current
+        guard let shouldPublish = try record.applyProgress(
+            bytesCompleted: bytesCompleted,
+            bytesTotal: bytesTotal,
+            itemsCompleted: itemsCompleted,
+            itemsTotal: itemsTotal,
+            now: now
+        ) else { return }
+        try commit(record)
+        if shouldPublish {
+            await publishSnapshots()
+        }
+    }
+
+    private func settleInactiveCancellation(
+        jobID: UUID,
+        attempt: RemoteTransferAttemptIdentity
+    ) async {
+        let now = await clock.nowNanoseconds()
         guard var record = records[jobID],
-              record.attemptID == attemptID,
-              record.state == .cancelling,
+              record.attempt == attempt,
+              record.snapshot.state == .cancelling,
               activeWorkers[jobID] == nil else {
             return
         }
-        markTerminal(&record, state: .cancelled)
-        records = records.merging([jobID: record]) { _, new in new }
-        trimTerminalRecords()
+        do {
+            let state: RemoteTransferJobState = record.settlementFailure.map {
+                .failed($0)
+            } ?? .cancelled
+            try markTerminal(&record, state: state, itemFailures: [], now: now)
+            try commit(record, shouldTrimTerminalRecords: true)
+        } catch {
+            installFailClosed(
+                record,
+                error: RemoteTransferEnginePolicy.failClosedError(error),
+                now: now
+            )
+        }
         await publishSnapshots()
         await pumpQueue()
     }
 
-    private func apply(_ outcome: RemoteTransferWorkerOutcome, to record: inout JobRecord) {
-        let validKeys = Set(record.request.logicalItemKeys)
-        record.completedLogicalItems = record.completedLogicalItems.union(
-            completedItems(from: outcome).intersection(validKeys)
-        )
-        switch outcome {
-        case .completed:
-            record.completedLogicalItems = record.completedLogicalItems.union(
-                record.attemptItems.map(\.logicalItemKey)
+    private func beginForcedSettlement(
+        jobID: UUID,
+        attempt: RemoteTransferAttemptIdentity,
+        error: RemoteFileError
+    ) async {
+        guard var record = records[jobID],
+              record.attempt == attempt,
+              !record.snapshot.state.isTerminal else {
+            return
+        }
+        record.settlementFailure = RemoteTransferEnginePolicy.failClosedError(error)
+        record.collision = nil
+        do {
+            try commit(record)
+        } catch {
+            records[jobID] = record
+        }
+        queue = queue.filter { $0 != jobID }
+        activeWorkers[jobID]?.task?.cancel()
+        let now = await clock.nowNanoseconds()
+        guard let current = records[jobID],
+              current.attempt == attempt,
+              !current.snapshot.state.isTerminal else { return }
+        record = current
+        do {
+            record.snapshot = try record.projectedSnapshot(
+                state: .cancelling,
+                runningPhase: nil,
+                collision: nil,
+                canRetry: false,
+                now: now,
+                settled: false
             )
-            record.itemsCompleted = max(record.itemsCompleted, record.attemptItems.count)
-            record.itemsTotal = max(record.itemsTotal ?? 0, record.attemptItems.count)
-            markTerminal(&record, state: .completed)
-
-        case let .conflict(collision, _):
-            guard validKeys.contains(collision.logicalItemKey) else {
-                markTerminal(
-                    &record,
-                    state: .failed(RemoteFileError(category: .malformedResponse))
-                )
-                return
-            }
-            record.state = .conflict
-            record.runningPhase = nil
-            record.collision = collision
-
-        case .cancelled:
-            markTerminal(&record, state: .cancelled)
-
-        case let .failed(error, failures, _):
-            record.itemFailures = failures.filter { validKeys.contains($0.logicalItemKey) }
-            markTerminal(&record, state: .failed(error))
+            try commit(record)
+        } catch {
+            record.snapshot = RemoteTransferJobSnapshot(
+                settlingFrom: record.snapshot,
+                updatedAtNanoseconds: now
+            )
+            records[jobID] = record
+        }
+        let active = activeWorkers[jobID]
+        await publishSnapshots()
+        if active == nil {
+            await settleInactiveCancellation(jobID: jobID, attempt: attempt)
         }
     }
 
-    private func completedItems(
-        from outcome: RemoteTransferWorkerOutcome
-    ) -> Set<RemoteTransferLogicalItemKey> {
-        switch outcome {
-        case let .completed(items), let .cancelled(items):
-            items
-        case let .conflict(_, items), let .failed(_, _, items):
-            items
+    private func apply(
+        _ outcome: RemoteTransferWorkerOutcome,
+        to record: inout JobRecord,
+        now: UInt64
+    ) throws {
+        let terminalSequence: UInt64?
+        switch outcome.disposition {
+        case .conflict: terminalSequence = nil
+        case .completed, .cancelled, .failed:
+            terminalSequence = try takeNextTerminalSequence()
         }
+        try record.apply(outcome, now: now, terminalSequence: terminalSequence)
     }
 
     private func markTerminal(
         _ record: inout JobRecord,
-        state: RemoteTransferJobState
+        state: RemoteTransferJobState,
+        itemFailures: [RemoteTransferItemFailure],
+        now: UInt64,
+        completedItemFloor: Int? = nil
+    ) throws {
+        try record.markTerminal(
+            state: state,
+            itemFailures: itemFailures,
+            now: now,
+            terminalSequence: try takeNextTerminalSequence(),
+            completedItemFloor: completedItemFloor
+        )
+    }
+
+    private func commit(
+        _ record: JobRecord,
+        shouldTrimTerminalRecords: Bool = false
+    ) throws {
+        var proposed = records
+        proposed[record.id] = record
+        if shouldTrimTerminalRecords {
+            proposed = trimmingTerminalRecords(in: proposed)
+        }
+        try validateAggregate(proposed)
+        records = proposed
+    }
+
+    private func installFailClosed(
+        _ original: JobRecord,
+        error: RemoteFileError,
+        now: UInt64
     ) {
-        record.state = state
-        record.runningPhase = nil
-        record.collision = nil
-        record.collisionResolution = nil
-        record.terminalSequence = nextTerminalSequence
+        var record = original
+        let terminalSequence = nextTerminalSequence
         if nextTerminalSequence < UInt64.max {
             nextTerminalSequence += 1
         }
+        record.failClosed(
+            error: error,
+            now: now,
+            terminalSequence: terminalSequence
+        )
+        var proposed = records
+        proposed[record.id] = record
+        records = trimmingTerminalRecords(in: proposed)
     }
 
-    private func trimTerminalRecords() {
-        let terminal = records.values
-            .filter { $0.state.isTerminal }
+    private func trimmingTerminalRecords(
+        in proposed: [UUID: JobRecord]
+    ) -> [UUID: JobRecord] {
+        let terminal = proposed.values
+            .filter { $0.snapshot.state.isTerminal }
             .sorted {
                 ($0.terminalSequence ?? UInt64.max) < ($1.terminalSequence ?? UInt64.max)
             }
         let excess = terminal.count - Self.maximumTerminalRecordCount
-        guard excess > 0 else { return }
+        guard excess > 0 else { return proposed }
         let removals = Set(terminal.prefix(excess).map(\.id))
-        records = records.filter { !removals.contains($0.key) }
+        return proposed.filter { !removals.contains($0.key) }
+    }
+
+    private func validateAggregate(_ proposed: [UUID: JobRecord]) throws {
+        try RemoteTransferRetainedStateValidator.validate(
+            proposed.values.map { record in
+                RemoteTransferRetainedJobState(
+                    isTerminal: record.snapshot.state.isTerminal,
+                    requestRetainedByteCount: record.request.retainedByteCount,
+                    checkpointManifest: record.checkpointManifest,
+                    snapshot: record.snapshot,
+                    collisionRawByteCount: record.retainedCollisionByteCount,
+                    settlementFailureByteCount: record.settlementFailure?.userFacingMessage.utf8.count ?? 0
+                )
+            }
+        )
     }
 
     private func publishSnapshots() async {
@@ -573,12 +785,15 @@ public actor RemoteTransferEngine {
         await publication(snapshots())
     }
 
-    private func monotonicTotal<T: FixedWidthInteger>(
-        previous: T?,
-        proposed: T?,
-        completed: T
-    ) -> T? {
-        guard previous != nil || proposed != nil else { return nil }
-        return max(previous ?? 0, proposed ?? 0, completed)
+    private func activeRecord(
+        jobID: UUID,
+        attempt: RemoteTransferAttemptIdentity
+    ) -> JobRecord? {
+        guard let record = records[jobID],
+              record.attempt == attempt,
+              activeWorkers[jobID]?.attempt == attempt,
+              record.snapshot.state != .cancelling,
+              !record.snapshot.state.isTerminal else { return nil }
+        return record
     }
 }

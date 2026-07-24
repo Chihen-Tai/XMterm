@@ -806,8 +806,8 @@ struct TerminalWorkspaceCommandTests {
             return provider
         }
 
-        func makeWorkspace() -> RemoteWorkspace {
-            let workspace = RemoteWorkspace(provider: makeProvider())
+        func makeWorkspace(runtimeID: TerminalSessionID) -> RemoteWorkspace {
+            let workspace = RemoteWorkspace(runtimeID: runtimeID, provider: makeProvider())
             recordedWorkspaces.append(workspace)
             return workspace
         }
@@ -872,7 +872,9 @@ struct TerminalWorkspaceCommandTests {
                     processLauncher: { _ in process }
                 )
             },
-            remoteWorkspaceFactory: { _, _ in fixture.makeWorkspace() }
+            remoteWorkspaceFactory: { sessionID, _ in
+                fixture.makeWorkspace(runtimeID: sessionID)
+            }
         )
     }
 
