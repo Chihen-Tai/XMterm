@@ -16,7 +16,7 @@ struct OpenSSHSFTPProviderLimits: Equatable, Sendable {
     }
 }
 
-public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider, RemoteFileTransferProvider {
+public actor OpenSSHSFTPRemoteFileProvider: RemoteFileProvider, RemoteTransferEndpointProvider {
     private let client: OpenSSHSFTPClient
     private let limits: OpenSSHSFTPProviderLimits
     private var isClosed = false

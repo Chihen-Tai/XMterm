@@ -1,6 +1,6 @@
 # ADR 0008: Extend System OpenSSH SFTP v3 for Bounded Mutations and Transfers
 
-- **Status:** Accepted for Phase 4B implementation
+- **Status:** Accepted; Task 3 contract repair in progress
 - **Date:** 2026-07-18
 
 ## Context
@@ -26,11 +26,36 @@ Select option 3. System `/usr/bin/ssh` remains the only SSH implementation and i
 launched with the ADR 0007 noninteractive structured argument forms. No shell or
 human output parser is introduced. No dependency is added.
 
-Keep the Phase 4A browsing provider and channel separate. Each RuntimeSession's
-Remote Workspace owns one transfer coordinator with at most two active workers.
-Each worker lazily creates one independent system-OpenSSH SFTP channel from the
-same immutable launch snapshot and reuses it across the files in that job. Closing
-or invalidating a worker never closes the browsing provider or terminal process.
+Keep the Phase 4A browsing provider and channel separate. Each SSH
+`RemoteWorkspace` owns exactly one `RemoteTransferCoordinator` and engine with at
+most two active workers; a local runtime owns none. The workspace creates that
+composition from the immutable runtime launch snapshot and awaits coordinator
+settlement before settling its browsing provider during close. No global manager,
+`RootView`, SwiftUI view, or `TerminalWorkspaceStore` owns operational queue state.
+Task 3 establishes this ownership with deterministic workers; Task 4 wires the
+production workers.
+
+Each worker factory receives an execution-only immutable
+`RemoteTransferEndpointSnapshot`. The snapshot carries a non-sensitive presentation
+summary plus trusted opaque system-OpenSSH or simulated connection material; it is
+never encoded or projected to UI. Each factory call creates a fresh dedicated
+`RemoteTransferEndpointProvider`. That single provider contract supplies structured
+one-directory listing, `lstat`, bounded reads, exclusive staging writes, the
+allowlisted mutations below, and cancellation/close. Provider listing never
+recurses. Its inherited `RemoteFileMutationProvider.capabilities` value comes from
+that provider's completed channel handshake and is rechecked after reacquisition.
+A worker never borrows another workspace, coordinator, browsing provider,
+or channel. Closing or invalidating a worker therefore never closes the browsing
+provider or terminal process.
+
+Every admitted `RemoteTransferRequest` contains its stable job ID, exact
+`RemoteTransferOwnerIdentity(runtimeID: TerminalSessionID, workspaceID: RemoteWorkspaceID)`,
+`RemoteTransferJobKind`, immutable local/remote requested-item sources, executable
+source/destination endpoint snapshots, exact raw paths, and explicit collision,
+metadata, symlink, recursive, and cross-runtime policies. Logical item UUIDs remain
+stable keys but are never the only description of work. A cross-runtime copy is
+owned by the destination and captures exactly one source endpoint before admission;
+one job never batches paths from multiple source endpoint snapshots.
 
 The codec may add only:
 
@@ -55,8 +80,26 @@ honestly; rename/remove operate on link identity without following its target.
 - A runtime has at most two active jobs. A same-runtime job owns one channel; a
   cross-runtime drag-copy job owns one channel per endpoint, so the bounded worker
   pool owns at most four transfer channels in addition to browsing.
-- Recursive jobs are bounded to 20,000 items, depth 128, and 1,024 pending
-  directories.
+- An engine retains at most 1,000 nonterminal jobs plus the 500 most-recent terminal
+  records after preserving all nonterminal jobs.
+- One job admits at most 20,000 top-level request items. Discovered work items,
+  checkpoints, and failures share one combined 20,000-record job limit and one
+  combined 40,000-record engine limit; retries do not multiply those records.
+- Cleanup manifests are separately bounded to 40,000 entries per job and 80,000
+  per engine. A job retains at most one current collision.
+- Variable-size retained execution identity is checked at 16 MiB per job and 64
+  MiB per engine. Local URLs are at most 32 KiB UTF-8, file/volume identifiers 4
+  KiB each, security-scoped bookmarks 64 KiB, and one relative raw work path 32
+  KiB; trusted endpoint material reports its retained byte cost.
+- Recursive jobs are additionally bounded to depth 128 and 1,024 pending
+  directories. All counters use checked arithmetic and fail `limitExceeded` before
+  insertion or wraparound.
+- A job retains only its current attempt UUID plus checked `UInt64` generation and
+  constant-memory counters, never UUID history. Generation exhaustion is
+  `limitExceeded`. Every stale callback comparison uses both UUID and generation.
+- Current-item, source-summary, and destination-summary presentation strings are
+  independently bounded to 4 KiB of UTF-8. UI snapshots contain summaries only,
+  never endpoint material, bookmarks, unrestricted raw paths, or handles.
 - Every upload item uses a uniquely named same-directory
   `.xmterm-partial-<attempt-id>-<item-id>` staging file recorded for cleanup, closes
   it, applies supported mode, verifies size, then publishes by rename.
@@ -66,10 +109,24 @@ honestly; rename/remove operate on link identity without following its target.
   uses the design's exact non-atomic destination-to-backup, stage-to-destination,
   restore-on-failure, cleanup sequence and reports that reduced guarantee.
 
+Recursive checkpoints use a stable top-level logical key plus bounded relative raw
+components. They distinguish discovered descendants, committed descendants,
+failed/unstarted work, and attempt-owned staging cleanup. Retry excludes committed
+descendants, revalidates remaining work, and restarts incomplete files at byte zero;
+byte-range resume is not claimed.
+
 Cancellation before send leaves a healthy channel usable. Cancellation, timeout,
 EOF, malformed framing, unknown response, request-ID mismatch, or any uncertainty
 after bytes may have entered the stream invalidates and reaps that channel. A job
 does not become cancelled until its worker and owned staging cleanup settle.
+
+A job in conflict owns no worker, endpoint provider/channel, or active slot.
+Resolution preserves the visible job and current attempt, retains bounded
+checkpoints, requeues deterministically, acquires fresh providers, and revalidates
+the destination. If a reacquired provider has lost the atomic-replace capability
+under which Replace was confirmed, the job returns to conflict. It must obtain a
+new explicit decision before the documented non-atomic fallback and never silently
+downgrades the guarantee.
 
 ## Security boundary
 
@@ -86,6 +143,9 @@ and cleanup targets only exact names created by that attempt.
   explicit malformed-response and request-ID tests.
 - Browsing remains responsive during large transfers at the cost of up to two
   additional lazy OpenSSH subsystem processes per runtime.
+- A destination-owned cross-runtime copy may need one source and one destination
+  channel per active job, so two workers own at most four endpoint channels in
+  addition to browsing.
 - Server-side copy is not assumed in SFTP v3. Copy streams through one worker;
   same-session move uses structured rename.
 - Atomic Replace depends on advertised server support; the fallback is honest and

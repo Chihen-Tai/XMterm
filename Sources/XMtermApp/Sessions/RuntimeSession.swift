@@ -5,6 +5,7 @@ import XMtermTerminal
 enum RuntimeSessionCompositionError: Error, Equatable {
     case terminalContractViolation
     case workspaceEligibilityMismatch
+    case workspaceOwnerMismatch
 }
 
 typealias RemoteFileProviderFactory = @MainActor (
@@ -51,6 +52,10 @@ final class RuntimeSession {
             break
         case (.local, .some), (.ssh, nil):
             throw RuntimeSessionCompositionError.workspaceEligibilityMismatch
+        }
+        if let remoteWorkspace,
+           remoteWorkspace.transferOwner.runtimeID != id {
+            throw RuntimeSessionCompositionError.workspaceOwnerMismatch
         }
 
         self.id = id

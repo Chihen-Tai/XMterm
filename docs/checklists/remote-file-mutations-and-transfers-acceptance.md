@@ -1,6 +1,7 @@
 # Phase 4B Remote File Mutations and Transfers Acceptance Checklist
 
-- **Status:** Implementation not started
+- **Status:** Task 3 architecture-contract repair complete; Task 4 production
+  streaming workers and mutations are next/in progress
 - **Design:**
   [`../design-docs/phase-4b-remote-file-mutations-and-transfers.md`](../design-docs/phase-4b-remote-file-mutations-and-transfers.md)
 - **Plan:**
@@ -11,6 +12,20 @@
 Do not mark a row complete from source inspection alone where the row requires
 rendered, packaged, local-filesystem, or real-host evidence.
 
+Current implementation checkpoint: Task 1 selection model/workspace migration,
+Task 2 capability contracts/codec, and Task 3A/3B/3C architecture-contract repair
+are recorded complete in the Phase 4B progress ledger. Production streaming
+workers begin in Task 4. Checklist rows below remain unchecked until their required
+implementation and acceptance evidence exists.
+
+Task order is binding: Task 3A request/endpoint/snapshot/retry/checkpoint/bounds
+contracts; Task 3B dedicated endpoint-provider/listing capability plus
+session/workspace ownership; Task 3C engine/coordinator migration and closeout;
+Task 4 production workers and mutations; Task 5 recursive/batch/collision
+execution; Task 6 actual multi-selection UI plus clipboard/action policy; Task 7
+drag-and-drop; Task 8 hardening; Task 9 security, packaged acceptance, real Relay
+acceptance, and closeout.
+
 ## Recovery and baseline
 
 - [x] Actual worktree recovered before edits: clean
@@ -19,6 +34,57 @@ rendered, packaged, local-filesystem, or real-host evidence.
 - [x] Phase 4A contracts, evidence, implementation, and progress ledger reviewed.
 - [x] Phase 4B design and ADR written before production implementation.
 - [x] Phase 4B execution plan written before production implementation.
+- [x] Task 3A immutable request, endpoint, snapshot, retry, checkpoint, and bounds
+  contracts pass focused RED/GREEN tests and preserve Task 1/2 regressions.
+- [x] Task 3B dedicated endpoint-provider/listing capability and SSH workspace
+  ownership pass focused RED/GREEN tests.
+- [x] Task 3C engine/coordinator migration, retry/conflict behavior, focused
+  repetition, full verifier, whitespace, and independent review pass.
+
+## Task 3 repaired contract gates
+
+- [x] Every admitted request contains executable immutable source/destination
+  endpoint snapshots, owner identity, exact raw paths or local file identity,
+  operation kind, and collision/metadata/symlink/recursive/cross-runtime policies.
+- [x] Logical item IDs remain stable job/item keys but never the only description
+  of work and never require a mutable UI lookup table.
+- [x] A job accepts one remote source endpoint snapshot only; same-runtime
+  copy/move/rename reuse it, while destination-owned copy adds one destination
+  endpoint, preserving the four-channel runtime bound.
+- [x] Retry separates visible job ID, stable logical item identity, and the current
+  attempt UUID plus checked `UInt64` generation without unbounded attempt history.
+- [x] Recursive checkpoints distinguish top-level items, discovered descendants,
+  committed descendants, failed/unstarted descendants, and attempt-owned cleanup;
+  retries exclude committed descendants and restart incomplete files at byte zero.
+- [x] Endpoint snapshots are executable, immutable, derived from the runtime launch
+  snapshot/trusted composition, and never exposed through UI snapshots.
+- [x] Dedicated endpoint providers offer structured one-directory listing, `lstat`,
+  bounded reads, exclusive staging writes, required mutations, cancellation, and
+  close without borrowing the browsing provider.
+- [x] Every SSH workspace owns exactly one coordinator/engine; local runtimes own
+  none; no global queue, RootView, SwiftUI view, or TerminalWorkspaceStore owns
+  operational queue state.
+- [x] Bounds are enforced exactly: 1,000 nonterminal jobs, 500 terminal records,
+  20,000 top-level request items/job, 20,000 combined work/checkpoint/failure
+  records/job, 40,000 combined such records/engine, 40,000 cleanup entries/job,
+  80,000 cleanup entries/engine, one collision/job, one current attempt/generation
+  per job, depth 128, 1,024 pending directories, and 4 KiB UTF-8 presentation
+  strings.
+- [x] Variable-sized execution identity is checked at 16 MiB/job and 64 MiB/engine;
+  local URLs are at most 32 KiB, file/volume identifiers 4 KiB, bookmarks 64 KiB,
+  and one relative raw work path 32 KiB.
+- [x] Conflict owns no worker, provider/channel, or active slot; resolution
+  preserves job/current attempt/checkpoint, revalidates destination, reacquires
+  providers, and requeues deterministically.
+
+Task 3 evidence: Task 3C focused tests passed 32/32; targeted Task 3C gate passed
+8/8; ownership gate passed 6/6; concurrency stress passed x5; the 10,000-retry
+stale-callback test passed; combined Task 3 suites passed 89 tests x3; independent
+architecture, concurrency, security, and code-quality reviews approved with no
+unresolved Critical/High finding; file caps, build, and diff checks passed.
+
+Task 5 debt: `RemoteTransferItemFailure` must become descendant-capable before
+recursive/batch acceptance can close.
 
 ## Selection and action policy
 
@@ -56,6 +122,9 @@ rendered, packaged, local-filesystem, or real-host evidence.
 - [ ] Symlink/package policy is rejected visibly and never silently follows targets.
 
 ## Clipboard and drag-and-drop
+
+Task 6 actual multi-selection UI plus clipboard/action policy must pass before
+Task 7 drag-and-drop acceptance begins.
 
 - [ ] Private Copy/Cut/Paste handles one/many exact same-runtime paths.
 - [ ] Stale/deleted/private malformed payloads fail safely.

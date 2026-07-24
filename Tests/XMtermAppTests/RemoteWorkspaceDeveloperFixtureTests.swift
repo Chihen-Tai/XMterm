@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XMtermCore
 import XMtermRemote
 @testable import XMtermApp
 
@@ -124,9 +125,24 @@ struct RemoteWorkspaceDeveloperFixtureTests {
     @MainActor
     func typedSimulatedDeveloperFixtureCompositionIsSimulated() throws {
         let provider = try RemoteWorkspaceDeveloperFixture.simulatedProvider()
-        let composition = RemoteProviderComposition.simulatedDeveloperFixture(provider)
+        let owner = RemoteTransferOwnerIdentity(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        )
+        let endpointProviderFactory = InMemoryRemoteTransferEndpointProviderFactory {
+            try RemoteWorkspaceDeveloperFixture.simulatedProvider()
+        }
+        let composition = try RemoteProviderComposition.simulatedDeveloperFixture(
+            provider,
+            owner: owner,
+            endpointProviderFactory: endpointProviderFactory,
+            displayName: "Simulated fixture"
+        )
         #expect(composition.provider is InMemoryRemoteFileProvider)
         #expect(composition.mode == .simulatedDeveloperFixture)
+        #expect(composition.transferOwner == owner)
+        #expect(composition.transferEndpoint != nil)
+        #expect(composition.transferEndpointProviderFactory != nil)
 
         let workspace = RemoteWorkspace(composition: composition)
 
@@ -174,5 +190,66 @@ struct RemoteWorkspaceDeveloperFixtureTests {
         let secondInitial = try await secondProvider.resolveInitialDirectory()
         let secondListing = try await secondProvider.listDirectory(secondInitial)
         #expect(secondListing == initialListing)
+    }
+
+    @Test("[SESS-011, FILE-XFER-001] simulated workspace worker mutations are visible through the browsing provider")
+    func simulatedWorkspaceWorkerMutationSharesBrowsingStorage() async throws {
+        let owner = RemoteTransferOwnerIdentity(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        )
+        let environment = [
+            RemoteWorkspaceDeveloperFixture.environmentKey:
+                RemoteWorkspaceDeveloperFixture.simulatedValue
+        ]
+        let composition = RemoteWorkspaceDeveloperFixture.composition(
+            owner: owner,
+            displayName: "Simulated transfer endpoint",
+            environment: environment,
+            isDeveloperBuild: true
+        )
+        let endpoint = try #require(composition.transferEndpoint)
+        let target = try path("/simulated/home/shared-worker-created.txt")
+        let requestedItem = RemoteTransferRequestedItem(
+            logicalKey: RemoteTransferLogicalItemKey(),
+            source: .remote(endpoint: endpoint, path: target)
+        )
+        let request = try RemoteTransferRequest(
+            id: UUID(),
+            owner: owner,
+            kind: .createFile,
+            requestedItems: [requestedItem],
+            destination: .none,
+            collisionPolicy: .ask,
+            metadataPolicy: .notApplicable,
+            symlinkPolicy: .rejectTransfer,
+            recursivePolicy: .none,
+            crossRuntimePolicy: .sameRuntimeOnly
+        )
+        let context = RemoteTransferWorkerContext(
+            request: request,
+            attempt: try RemoteTransferAttemptIdentity(id: UUID(), generation: 1),
+            items: [
+                RemoteTransferAttemptItem(
+                    logicalItemKey: requestedItem.logicalKey,
+                    attemptItemID: RemoteTransferAttemptItemID()
+                )
+            ],
+            checkpointManifest: .empty,
+            resolvedCollision: nil,
+            applyToAllResolution: nil,
+            requiresDestinationRevalidation: false
+        )
+        let worker = try await composition.transferWorkerFactory.makeWorker(for: context)
+
+        let outcome = await worker.run { _ in }
+        let listing = try await composition.provider.listDirectory(try path("/simulated/home"))
+
+        #expect(outcome.disposition == .completed)
+        #expect(listing.entries.map(\.path).contains(target))
+    }
+
+    private func path(_ value: String) throws -> RemotePath {
+        try RemotePath(rawBytes: Array(value.utf8))
     }
 }

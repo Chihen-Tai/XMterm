@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import XMtermCore
 
 @MainActor
 @Observable
@@ -10,18 +11,26 @@ final class RemoteTransferPublishedState {
 @MainActor
 @Observable
 public final class RemoteTransferCoordinator {
+    public let owner: RemoteTransferOwnerIdentity
+
     public var jobs: [RemoteTransferJobSnapshot] {
         publishedState.jobs
     }
 
     @ObservationIgnored private let engine: RemoteTransferEngine
     @ObservationIgnored private let publishedState: RemoteTransferPublishedState
+    @ObservationIgnored private var isClosing = false
 
     public init(
+        owner: RemoteTransferOwnerIdentity = RemoteTransferOwnerIdentity(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        ),
         workerFactory: any RemoteTransferWorkerFactory,
         identifierGenerator: any RemoteTransferIdentifierGenerator = SystemRemoteTransferIdentifierGenerator(),
         clock: any RemoteTransferClock = SystemRemoteTransferClock()
     ) {
+        self.owner = owner
         let state = RemoteTransferPublishedState()
         publishedState = state
         engine = RemoteTransferEngine(
@@ -36,7 +45,13 @@ public final class RemoteTransferCoordinator {
 
     @discardableResult
     public func enqueue(_ request: RemoteTransferRequest) async throws -> UUID {
-        try await engine.enqueue(request)
+        guard !isClosing else {
+            throw RemoteTransferEngineError.invalidState
+        }
+        guard request.owner == owner else {
+            throw RemoteTransferEngineError.invalidRequest
+        }
+        return try await engine.enqueue(request)
     }
 
     public func cancel(jobID: UUID) async {
@@ -49,9 +64,14 @@ public final class RemoteTransferCoordinator {
 
     public func resolveCollision(
         jobID: UUID,
+        attempt: RemoteTransferAttemptIdentity,
         resolution: RemoteTransferCollisionResolution
     ) async throws {
-        try await engine.resolveCollision(jobID: jobID, resolution: resolution)
+        try await engine.resolveCollision(
+            jobID: jobID,
+            attempt: attempt,
+            resolution: resolution
+        )
     }
 
     public func clearTerminalRecords() async {
@@ -59,6 +79,11 @@ public final class RemoteTransferCoordinator {
     }
 
     public func close() async {
+        isClosing = true
         await engine.cancelAllAndSettle()
+    }
+
+    package func beginClosing() {
+        isClosing = true
     }
 }

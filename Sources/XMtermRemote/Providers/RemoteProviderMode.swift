@@ -1,3 +1,5 @@
+import XMtermCore
+
 /// Trusted, composition-assigned classification of a workspace's provider.
 ///
 /// The mode is set only by the trusted composition boundary when it constructs a
@@ -23,42 +25,109 @@ public enum RemoteProviderMode: Equatable, Hashable, Sendable {
 public struct RemoteProviderComposition: Sendable {
     package let provider: any RemoteFileProvider
     package let mode: RemoteProviderMode
+    package let transferOwner: RemoteTransferOwnerIdentity
+    package let transferEndpoint: RemoteTransferEndpointSnapshot?
+    package let transferEndpointProviderFactory:
+        (any RemoteTransferEndpointProviderFactory)?
+    package let transferWorkerFactory: any RemoteTransferWorkerFactory
 
     private init(
         provider: any RemoteFileProvider,
-        mode: RemoteProviderMode
+        mode: RemoteProviderMode,
+        transferOwner: RemoteTransferOwnerIdentity,
+        transferEndpoint: RemoteTransferEndpointSnapshot?,
+        transferEndpointProviderFactory: (any RemoteTransferEndpointProviderFactory)?,
+        transferWorkerFactory: any RemoteTransferWorkerFactory
     ) {
         self.provider = provider
         self.mode = mode
+        self.transferOwner = transferOwner
+        self.transferEndpoint = transferEndpoint
+        self.transferEndpointProviderFactory = transferEndpointProviderFactory
+        self.transferWorkerFactory = transferWorkerFactory
     }
 
     package static func packageTest(
-        _ provider: any RemoteFileProvider
-    ) -> RemoteProviderComposition {
-        RemoteProviderComposition(provider: provider, mode: .packageTest)
-    }
-
-    public static func unavailable() -> RemoteProviderComposition {
-        RemoteProviderComposition(
-            provider: UnavailableRemoteFileProvider(),
-            mode: .unavailable
-        )
-    }
-
-    /// The production trust claim is available only for the concrete reviewed
-    /// OpenSSH/SFTP provider; arbitrary protocol conformers cannot acquire it.
-    public static func production(
-        _ provider: OpenSSHSFTPRemoteFileProvider
-    ) -> RemoteProviderComposition {
-        RemoteProviderComposition(provider: provider, mode: .production)
-    }
-
-    package static func simulatedDeveloperFixture(
-        _ provider: InMemoryRemoteFileProvider
+        _ provider: any RemoteFileProvider,
+        owner: RemoteTransferOwnerIdentity,
+        workerFactory: any RemoteTransferWorkerFactory = UnavailableRemoteTransferWorkerFactory()
     ) -> RemoteProviderComposition {
         RemoteProviderComposition(
             provider: provider,
-            mode: .simulatedDeveloperFixture
+            mode: .packageTest,
+            transferOwner: owner,
+            transferEndpoint: nil,
+            transferEndpointProviderFactory: nil,
+            transferWorkerFactory: workerFactory
+        )
+    }
+
+    public static func unavailable() -> RemoteProviderComposition {
+        let owner = RemoteTransferOwnerIdentity(
+            runtimeID: TerminalSessionID(),
+            workspaceID: RemoteWorkspaceID()
+        )
+        return unavailable(owner: owner)
+    }
+
+    public static func unavailable(
+        owner: RemoteTransferOwnerIdentity
+    ) -> RemoteProviderComposition {
+        RemoteProviderComposition(
+            provider: UnavailableRemoteFileProvider(),
+            mode: .unavailable,
+            transferOwner: owner,
+            transferEndpoint: nil,
+            transferEndpointProviderFactory: nil,
+            transferWorkerFactory: UnavailableRemoteTransferWorkerFactory()
+        )
+    }
+
+    package static func production(
+        profile: SSHSessionProfile,
+        owner: RemoteTransferOwnerIdentity,
+        displayName: String
+    ) throws -> RemoteProviderComposition {
+        let provider = try OpenSSHSFTPRemoteFileProvider(profile: profile)
+        let endpointProviderFactory = OpenSSHSFTPTransferProviderFactory()
+        let endpoint = try OpenSSHSFTPTransferProviderFactory.endpointSnapshot(
+            profile: profile,
+            owner: owner,
+            displayName: displayName
+        )
+        return RemoteProviderComposition(
+            provider: provider,
+            mode: .production,
+            transferOwner: owner,
+            transferEndpoint: endpoint,
+            transferEndpointProviderFactory: endpointProviderFactory,
+            transferWorkerFactory: RemoteTransferProductionWorkerFactory(
+                endpointProviderFactory: endpointProviderFactory,
+                localStaging: DarwinLocalTransferStaging()
+            )
+        )
+    }
+
+    package static func simulatedDeveloperFixture(
+        _ provider: InMemoryRemoteFileProvider,
+        owner: RemoteTransferOwnerIdentity,
+        endpointProviderFactory: InMemoryRemoteTransferEndpointProviderFactory,
+        displayName: String
+    ) throws -> RemoteProviderComposition {
+        let endpoint = try endpointProviderFactory.endpointSnapshot(
+            owner: owner,
+            displayName: displayName
+        )
+        return RemoteProviderComposition(
+            provider: provider,
+            mode: .simulatedDeveloperFixture,
+            transferOwner: owner,
+            transferEndpoint: endpoint,
+            transferEndpointProviderFactory: endpointProviderFactory,
+            transferWorkerFactory: RemoteTransferProductionWorkerFactory(
+                endpointProviderFactory: endpointProviderFactory,
+                localStaging: DarwinLocalTransferStaging()
+            )
         )
     }
 }

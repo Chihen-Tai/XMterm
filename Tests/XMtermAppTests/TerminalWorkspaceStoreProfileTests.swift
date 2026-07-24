@@ -205,8 +205,17 @@ struct TerminalWorkspaceStoreProfileTests {
             sessionFactory: { sessionID, specification in
                 makeSession(id: sessionID, specification: specification)
             },
-            remoteWorkspaceFactory: { _, _ in
-                RemoteWorkspace(composition: .unavailable())
+            remoteWorkspaceFactory: { sessionID, _ in
+                let workspaceID = RemoteWorkspaceID()
+                return RemoteWorkspace(
+                    id: workspaceID,
+                    composition: .unavailable(
+                        owner: RemoteTransferOwnerIdentity(
+                            runtimeID: sessionID,
+                            workspaceID: workspaceID
+                        )
+                    )
+                )
             }
         )
 

@@ -171,23 +171,32 @@ Exact recommended next task: **Phase 4B — Remote File Mutations and Transfers.
 
 ## In progress — Phase 4B — Remote File Mutations and Transfers
 
-Design, transport ADR, execution plan, and acceptance checklist are locked in:
+Design, transport ADR, execution plan, and acceptance checklist are locked in. Task
+3 architecture-contract repair is complete, and Task 4 production streaming workers
+and mutations are the active next implementation gate:
 [`docs/design-docs/phase-4b-remote-file-mutations-and-transfers.md`](docs/design-docs/phase-4b-remote-file-mutations-and-transfers.md),
 [`docs/decisions/0008-remote-file-mutation-and-transfer-transport.md`](docs/decisions/0008-remote-file-mutation-and-transfer-transport.md),
 [`docs/exec-plans/0010-phase-4b-remote-file-mutations-and-transfers.md`](docs/exec-plans/0010-phase-4b-remote-file-mutations-and-transfers.md), and
 [`docs/checklists/remote-file-mutations-and-transfers-acceptance.md`](docs/checklists/remote-file-mutations-and-transfers-acceptance.md).
 
-- [ ] Implement stable multi/range selection and batch actions.
-- [ ] Implement Copy, Cut, Paste, Move, Rename, Duplicate, Delete, New File/Folder
-  with the private remote-entry pasteboard representation.
-- [ ] Implement remote-to-remote drag move/copy.
-- [ ] Implement Finder upload/download drag-and-drop.
-- [ ] Implement name-collision sheet, batch progress, cancellation, and per-item
-  errors.
-- [ ] Add sorting, type-to-select, path entry, hidden-file toggle, Quick Look-style
-  preview, and selection recovery.
-- [ ] Add revision-safe transfer staging, executable-bit preservation, retry
-  ordering, and exact structured path tests.
+- [x] Complete Task 3A request, endpoint, snapshot, retry, checkpoint, and exact
+  bounds contracts without marking production execution implemented.
+- [x] Complete Task 3B dedicated endpoint-provider/listing capability and
+  per-session SSH workspace transfer ownership; local runtimes own none.
+- [x] Complete Task 3C engine/coordinator migration, retry/conflict behavior,
+  tests, review, and closeout before Task 4 production workers begin.
+- [ ] Implement Task 4 production streaming workers and structured mutations. This
+  is the next/in-progress Phase 4B task.
+- [ ] Implement Task 5 recursive transfer, batch operations, and collisions.
+  Before Task 5 acceptance, repair the Medium debt that `RemoteTransferItemFailure`
+  must retain descendant-capable identity for recursive/batch failures.
+- [ ] Implement Task 6 actual multi-selection UI plus Copy/Cut/Paste and action
+  policy before any drag-and-drop acceptance.
+- [ ] Implement Task 7 remote and Finder drag-and-drop on top of proven
+  multi-selection and transfer execution.
+- [ ] Complete Task 8 UX/accessibility/lifecycle/performance hardening.
+- [ ] Complete Task 9 security, packaged acceptance, real Relay acceptance, and
+  closeout from direct plan/checklist evidence only.
 
 ## Then — local editor auto-sync
 

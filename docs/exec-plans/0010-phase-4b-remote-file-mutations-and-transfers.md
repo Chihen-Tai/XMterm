@@ -12,10 +12,12 @@ streaming transfers, queues, collisions, clipboard operations, and drag-and-drop
 
 **Architecture:** Each `RuntimeSession` retains terminal and Remote Workspace as
 sibling capabilities. The workspace owns immutable selection plus narrow operation
-and transfer coordinators; their I/O actors use a dedicated, maximum-two-worker
-SFTP channel pool separate from the Phase 4A browsing provider. UI code sends typed
-intents and displays immutable snapshots; it never handles SFTP packets, processes,
-file descriptors, or transfer buffers.
+and transfer coordinators. Every SSH workspace owns exactly one transfer
+coordinator/engine; a local runtime owns none. Transfer actors create fresh
+dedicated endpoint providers from complete execution snapshots in a maximum-two-
+worker pool separate from the Phase 4A browsing provider. UI code sends typed
+intents and displays presentation-only immutable snapshots; it never handles SFTP
+packets, endpoint connection material, processes, file descriptors, or buffers.
 
 **Tech stack:** Swift 6, Swift concurrency/actors, SwiftUI/AppKit, Swift Testing,
 Foundation/Darwin filesystem APIs, system OpenSSH, bounded SFTP v3, SwiftPM. No new
@@ -36,11 +38,26 @@ dependency.
 - System OpenSSH remains the SSH/authentication/host-key authority. No shell, SCP,
   human `sftp`/`ls` parsing, host-key bypass, credential storage, raw stderr/path
   logging, remote daemon, or new dependency.
-- Browsing remains lazy/immediate-child-only. Recursion occurs only for an explicit
-  operation and is bounded to 20,000 items, depth 128, and 1,024 pending directories.
+- Browsing and endpoint-provider listing remain lazy/immediate-child-only. Recursion
+  occurs only for an explicit operation and is bounded to 20,000 combined work/
+  checkpoint/failure records per job, depth 128, and 1,024 pending directories.
 - At most two active transfer jobs per runtime. A same-runtime job owns one channel;
   a cross-runtime drag-copy job owns one channel per endpoint, for at most four
   job-owned channels. Browsing uses its existing independent channel.
+- Retention is exact: 1,000 nonterminal jobs, 500 most-recent terminal records,
+  20,000 top-level request items per job, 20,000 combined discovered-work/
+  checkpoint/failure records per job and 40,000 per engine, 40,000 cleanup entries
+  per job and 80,000 per engine, and zero or one current collision per job.
+- Variable-size execution identity is bounded with checked byte accounting at 16
+  MiB per job and 64 MiB per engine. Local URLs are at most 32 KiB UTF-8,
+  file/volume identifiers 4 KiB each, bookmarks 64 KiB, and one relative raw work
+  path 32 KiB. Unique endpoint material reports its retained byte cost.
+- Each job retains one current attempt UUID plus checked `UInt64` generation and
+  constant-memory counters, never attempt UUID history. Generation exhaustion and
+  every checked aggregate overflow fail `limitExceeded`.
+- Current-item, source-summary, and destination-summary presentation strings are
+  each bounded to 4 KiB of UTF-8. Presentation snapshots never contain trusted
+  endpoint material, bookmarks, handles, credentials, or unrestricted raw paths.
 - Transfer chunks are 64 KiB. No whole-file buffering, per-chunk task, per-file
   process, unbounded queue, polling loop, or network/filesystem I/O on `MainActor`.
 - Downloads and uploads stage and publish complete content. No silent overwrite.
@@ -56,6 +73,26 @@ dependency.
 - Keep functions focused, replace collections/values immutably, validate every
   external input, and surface typed errors.
 - Do not commit, merge, push, or tag.
+
+### Focused Swift Testing command prefix
+
+This Command Line Tools host requires the repository's `Testing.framework` search
+and runtime paths. In the same `zsh` used for the focused commands, define this
+task-specific array exactly once; an unflagged `swift test` failure with `no such
+module 'Testing'` is an environment failure, not valid RED evidence:
+
+```sh
+xmterm_testing_flags=(
+  -Xswiftc -warnings-as-errors
+  -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks
+  -Xlinker -F -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks
+  -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks
+  -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
+)
+```
+
+No task includes a commit step because the user prohibited commit, merge, push,
+tag, and staging operations.
 
 ## Baseline recovery evidence
 
@@ -87,10 +124,15 @@ dependency.
   read/mutate/transfer capability value.
 - Create `Sources/XMtermRemote/Operations/RemoteFileMutationProvider.swift`: typed
   stat/create/rename/remove/set-attributes boundary.
-- Create `Sources/XMtermRemote/Transfer/RemoteFileTransferProvider.swift`: opaque
-  read/write stream and provider-factory protocols.
-- Create `Sources/XMtermRemote/Transfer/RemoteTransferModels.swift`: request, job,
-  attempt, item, state, progress, collision, and error values.
+- Modify `Sources/XMtermRemote/Transfer/RemoteFileTransferProvider.swift`: replace
+  the incomplete worker boundary with `RemoteTransferEndpointProvider` (structured
+  one-directory listing, lstat, read, exclusive staging write, mutations, cancel/
+  close) and `RemoteTransferEndpointProviderFactory` accepting an immutable
+  executable endpoint snapshot.
+- Create `Sources/XMtermRemote/Transfer/RemoteTransferModels.swift`: complete
+  request, endpoint, owner, local-file, requested-item, destination, policy, work-
+  key, checkpoint, attempt, timestamps, state, progress, collision, and bounded
+  presentation values.
 - Create `Sources/XMtermRemote/Transfer/RemoteCollisionResolver.swift`: pure Keep
   Both naming and Apply-to-All policy.
 - Create `Sources/XMtermRemote/Transfer/RemoteRecursivePlanner.swift`: bounded
@@ -114,8 +156,9 @@ dependency.
   typed request methods and extension-aware final rename.
 - Modify `Sources/XMtermRemote/Providers/OpenSSH/OpenSSHSFTPRemoteFileProvider.swift`:
   mutation/stream protocols, staging, metadata, and safe cleanup.
-- Create `Sources/XMtermRemote/Providers/OpenSSH/OpenSSHSFTPTransferProviderFactory.swift`:
-  lazy independent worker creation from the immutable target.
+- Modify `Sources/XMtermRemote/Providers/OpenSSH/OpenSSHSFTPTransferProviderFactory.swift`:
+  lazy independent worker creation from a trusted endpoint snapshot; production
+  streaming workers remain Task 4 work.
 - Preserve `Sources/XMtermRemote/Providers/OpenSSH/OpenSSHSubsystemProcess.swift` and
   `OpenSSHSFTPTarget.swift` launch/security boundaries unless a test proves a
   narrowly required lifecycle correction.
@@ -256,55 +299,372 @@ public protocol RemoteWritableFile: Sendable {
   production transport suites, and `./scripts/verify.sh`.
 - [ ] Perform an independent protocol/security review before this slice closes.
 
-## Task 3 — Phase 4B.3 transfer queue, progress, cancellation, and retry
+## Task 3A — Complete execution, retry, checkpoint, and snapshot contracts
+
+**Status:** complete.
 
 **Acceptance:** `APP-007`, `APP-008`, `FILE-XFER-001`, `FILE-XFER-003`,
-`SESS-011`.
+`SESS-011`. Preserve every completed Task 1 and Task 2 behavior and test.
+
+**Files:**
+
+- Create/modify `Sources/XMtermRemote/Transfer/RemoteTransferModels.swift`.
+- Create/modify `Tests/XMtermRemoteTests/RemoteTransferModelsTests.swift`.
+- Create/modify `Tests/XMtermRemoteTests/RemoteTransferBoundsTests.swift`.
 
 **Interfaces produced:**
 
 ```swift
-public enum RemoteTransferJobState: Equatable, Sendable {
-    case queued, preparing, running, conflict
-    case cancelling, cancelled, completed
-    case failed(RemoteFileError)
+public enum RemoteTransferJobKind: Equatable, Sendable {
+    case upload, download, remoteCopy, remoteMove, delete
+    case createFile, createDirectory, rename
 }
 
-public struct RemoteTransferJobSnapshot: Identifiable, Equatable, Sendable {
+public struct RemoteTransferOwnerIdentity: Equatable, Hashable, Sendable {
+    public let runtimeID: TerminalSessionID
+    public let workspaceID: RemoteWorkspaceID
+}
+
+public enum RemoteTransferEndpointKind: Equatable, Sendable {
+    case openSSH, simulated, packageTest
+}
+
+public struct RemoteTransferPresentationText: Equatable, Sendable {
+    public static let maximumUTF8ByteCount = 4 * 1_024
+    public let value: String
+    public init(_ value: String) throws
+}
+
+package protocol RemoteTransferTrustedConnectionMaterial: Sendable {
+    var retainedByteCount: Int { get }
+}
+
+public struct RemoteTransferEndpointSummary: Equatable, Sendable {
+    public let displayName: RemoteTransferPresentationText
+    public let kind: RemoteTransferEndpointKind
+}
+
+public struct RemoteTransferEndpointSnapshot: Equatable, Sendable {
     public let id: UUID
-    public let attemptID: UUID
-    public let state: RemoteTransferJobState
-    public let runningPhase: RemoteTransferRunningPhase?
-    public let bytesCompleted: UInt64
-    public let bytesTotal: UInt64?
-    public let itemsCompleted: Int
-    public let itemsTotal: Int?
-    public let itemFailures: [RemoteTransferItemFailure]
+    public let owner: RemoteTransferOwnerIdentity
+    public let summary: RemoteTransferEndpointSummary
+    package let trustedConnectionMaterial: any RemoteTransferTrustedConnectionMaterial
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+}
+
+public enum RemoteTransferLocalItemKind: Equatable, Sendable {
+    case regularFile, directory
+}
+
+public struct RemoteTransferLocalFileIdentity: Equatable, Sendable {
+    public let url: URL
+    public let fileResourceIdentifier: Data
+    public let volumeIdentifier: Data?
+    public let kind: RemoteTransferLocalItemKind
+    public let observedSize: UInt64?
+    public let observedModificationNanoseconds: Int64?
+    package let securityScopedBookmark: Data?
+}
+
+public enum RemoteTransferItemSource: Equatable, Sendable {
+    case remote(endpoint: RemoteTransferEndpointSnapshot, path: RemotePath)
+    case local(RemoteTransferLocalFileIdentity)
+}
+
+public struct RemoteTransferRequestedItem: Equatable, Sendable {
+    public let logicalKey: RemoteTransferLogicalItemKey
+    public let source: RemoteTransferItemSource
+}
+
+public enum RemoteTransferDestination: Equatable, Sendable {
+    case remoteDirectory(endpoint: RemoteTransferEndpointSnapshot, path: RemotePath)
+    case remotePath(endpoint: RemoteTransferEndpointSnapshot, path: RemotePath)
+    case localDirectory(RemoteTransferLocalFileIdentity)
+    case none
+}
+
+public enum RemoteTransferCollisionPolicy: Equatable, Sendable {
+    case notApplicable, ask, replace, skip, keepBoth
+}
+public enum RemoteTransferMetadataPolicy: Equatable, Sendable {
+    case notApplicable, preserveSupportedPermissions
+}
+public enum RemoteTransferSymlinkPolicy: Equatable, Sendable {
+    case rejectTransfer, operateOnLinkIdentity
+}
+public enum RemoteTransferRecursivePolicy: Equatable, Sendable {
+    case none
+    case bounded(maximumItems: Int, maximumDepth: Int, maximumPendingDirectories: Int)
+}
+public enum RemoteTransferCrossRuntimePolicy: Equatable, Sendable {
+    case sameRuntimeOnly
+    case destinationOwnedCopy(sourceOwner: RemoteTransferOwnerIdentity)
+}
+
+public struct RemoteTransferRequest: Equatable, Sendable {
+    public let id: UUID
+    public let owner: RemoteTransferOwnerIdentity
+    public let kind: RemoteTransferJobKind
+    public let requestedItems: [RemoteTransferRequestedItem]
+    public let destination: RemoteTransferDestination
+    public let collisionPolicy: RemoteTransferCollisionPolicy
+    public let metadataPolicy: RemoteTransferMetadataPolicy
+    public let symlinkPolicy: RemoteTransferSymlinkPolicy
+    public let recursivePolicy: RemoteTransferRecursivePolicy
+    public let crossRuntimePolicy: RemoteTransferCrossRuntimePolicy
+}
+
+public struct RemoteTransferAttemptIdentity: Equatable, Hashable, Sendable {
+    public let id: UUID
+    public let generation: UInt64
+}
+
+public struct RemoteTransferWorkItemKey: Equatable, Hashable, Sendable {
+    public let topLevelKey: RemoteTransferLogicalItemKey
+    public let relativeRawComponents: [RemotePathComponent]
+}
+
+public enum RemoteTransferCheckpointDisposition: Equatable, Sendable {
+    case discovered, committed, failed(RemoteFileError), unstarted
+}
+
+public struct RemoteTransferCheckpoint: Equatable, Sendable {
+    public let key: RemoteTransferWorkItemKey
+    public let disposition: RemoteTransferCheckpointDisposition
+}
+
+public enum RemoteTransferCleanupLocation: Equatable, Sendable {
+    case remote(endpointID: UUID, path: RemotePath)
+    case localDirectoryEntry(
+        directory: RemoteTransferLocalFileIdentity,
+        component: RemotePathComponent
+    )
+}
+
+public struct RemoteTransferCleanupEntry: Equatable, Sendable {
+    public let attempt: RemoteTransferAttemptIdentity
+    public let workItemKey: RemoteTransferWorkItemKey
+    public let location: RemoteTransferCleanupLocation
+}
+
+public struct RemoteTransferTimestamps: Equatable, Sendable {
+    public let createdAtNanoseconds: UInt64
+    public let startedAtNanoseconds: UInt64?
+    public let updatedAtNanoseconds: UInt64
+    public let settledAtNanoseconds: UInt64?
 }
 ```
 
-- [ ] Write RED tests for FIFO start order, maximum two active jobs, 1,000-job
-  model capacity, 500 terminal-state transfer-record retention, monotonic
-  bytes/items, transferring/verifying phases, conflict and state transitions,
-  one failure not corrupting another, collision suspension, cancellation settlement,
-  retry attempt identity, committed-item exclusion, and two-engine isolation.
-- [ ] Add `RemoteTransferModels`, a pure collision resolver, engine actor, and
-  main-actor coordinator. Use injected UUID/clock/provider/staging factories for
-  deterministic tests without production-only test hooks.
-- [ ] Implement queue pumping without detached work, polling, or per-chunk tasks.
-  Coalesce progress publication to 10 Hz but publish state/collision/error edges
-  immediately.
-- [ ] Make cancellation await worker invalidation and staging cleanup before
-  `.cancelled`; reject stale attempt completion.
-- [ ] Make `conflict` release its worker/channel set and active slot; resolution
-  requeues the same job/attempt in original FIFO order and revalidates the
-  destination before publication.
-- [ ] Make explicit retry create a new attempt, rediscover failed/unstarted items,
-  and never republish a prior attempt.
-- [ ] Run focused RED/GREEN, concurrency stress/repetition, Thread Sanitizer when
-  practical, and `./scripts/verify.sh`.
-- [ ] Review actor isolation, retained task ownership, unchecked continuations,
-  cancellation latency, and memory bounds.
+The Task 3A implementation must encode and test the design document's complete
+operation matrix for upload, download, remote copy/move, delete, create file/
+directory, and rename. No executor may infer create targets or whether a
+destination is a directory from display text or operation naming. A job accepts
+exactly one remote source endpoint snapshot; same-runtime copy/move/rename reuse it
+as the destination endpoint, and destination-owned copy adds exactly one distinct
+destination endpoint. Recursive maximum items may not be below the admitted
+top-level item count.
+
+`RemoteTransferJobSnapshot` is presentation-only and includes stable job ID,
+current `RemoteTransferAttemptIdentity`, kind, bounded source/destination summaries,
+state/running phase, byte/item counters, bounded current-item display, the current
+collision summary, bounded safe failures, retry eligibility, and timestamps. It
+must not expose endpoint material, security-scoped bookmarks, local resource IDs,
+raw provider values, handles, credentials, or unrestricted raw paths.
+
+- [x] **RED — request completeness and owner validation.** Add named tests proving
+  every admitted kind carries executable immutable source/destination identity and
+  policies, invalid owner/source/destination combinations fail before admission,
+  logical UUIDs cannot require a UI lookup, and later profile/workspace mutation
+  cannot alter a captured endpoint. Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferModelsTests/(requestCarriesCompleteExecutionIdentity|rejectsOwnerAndPolicyMismatch|endpointSnapshotIsIndependentOfWorkspaceMutation|admittedRequestNeedsNoLookup)'
+  ```
+
+  Expected RED: compile failures for the missing contract types/fields or failing
+  assertions against the incomplete request.
+
+- [x] **GREEN — immutable model slice.** Implement only the values and validating
+  initializers above. Endpoint equality uses its trusted snapshot `id`; the trusted
+  material remains package-internal and non-encodable. Local identities require an
+  absolute file URL plus nonempty resource ID. Re-run the same command and require
+  all four tests to pass.
+
+- [x] **RED — attempt/checkpoint/bounds.** Add tests for generation 1, fresh UUID
+  plus checked generation on retry, `UInt64.max` exhaustion as `limitExceeded`,
+  stale callback rejection after 10,000 generated attempts using full UUID+
+  generation comparison, committed recursive descendant exclusion, incomplete-file
+  restart from byte zero, and exact boundary/boundary+1 cases for every bound. Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferBoundsTests|RemoteTransferModelsTests/(attempt|checkpoint|presentation)'
+  ```
+
+  Expected RED: missing work/checkpoint/attempt types and absent checked-limit
+  behavior.
+
+- [x] **GREEN — bounded model slice.** Retain one current attempt UUID/generation
+  and constant-memory counters only. Add one bounded checkpoint map and a separate
+  cleanup manifest. Enforce exactly 1,000 nonterminal jobs, 500 terminal records,
+  20,000 top-level request items/job, 20,000 combined discovered-work/checkpoint/
+  failure records/job, 40,000 combined such records/engine, 40,000 cleanup entries/
+  job, 80,000 cleanup entries/engine, one collision/job, and 4 KiB UTF-8 for each
+  current/source/destination presentation string. Enforce the 32 KiB local URL, 4
+  KiB file/volume identifier, 64 KiB bookmark, 32 KiB relative raw work path, 16
+  MiB/job retained-variable-data, and 64 MiB/engine retained-variable-data limits.
+  Checkpoint and cleanup identities are unique. Attempt generation starts at one,
+  rejects current-UUID reuse, and uses checked arithmetic. Use `limitExceeded` and
+  never retain attempt UUID history. Re-run the bounds command and require all
+  boundary tests to pass.
+
+- [x] Run related Task 1/2 model/provider regressions with:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteSelectionStateTests|RemoteMutationTransferProviderContractTests|SFTPBinaryCodecTests|OpenSSHSFTPClientTests'
+  ```
+
+## Task 3B — Dedicated endpoint provider and workspace ownership
+
+**Status:** complete.
+
+**Acceptance:** `FILE-XFER-001`–`004`, `SESS-004`, `SESS-006`, `SESS-011`.
+
+**Files:**
+
+- Modify `Sources/XMtermRemote/Transfer/RemoteFileTransferProvider.swift`.
+- Modify deterministic and OpenSSH provider factories only as required to accept
+  endpoint snapshots; do not wire production transfer workers yet.
+- Modify `Sources/XMtermRemote/Workspace/RemoteWorkspace.swift` and package
+  composition seams.
+- Modify `Sources/XMtermApp/RemoteWorkspace/RemoteWorkspaceProductionComposition.swift`.
+- Add focused provider-factory, workspace-ownership, and runtime-isolation tests.
+
+**Interface produced:**
+
+```swift
+public protocol RemoteTransferEndpointProvider: RemoteFileMutationProvider {
+    func listDirectory(_ path: RemotePath) async throws -> RemoteDirectoryListing
+    func openFileForReading(_ path: RemotePath) async throws -> any RemoteReadableFile
+    func openFileForWriting(_ path: RemotePath) async throws -> any RemoteWritableFile
+    func cancelAll() async
+    func close() async
+}
+
+public protocol RemoteTransferEndpointProviderFactory: Sendable {
+    func makeProvider(
+        for endpoint: RemoteTransferEndpointSnapshot
+    ) async throws -> any RemoteTransferEndpointProvider
+}
+```
+
+- [x] **RED — structured dedicated provider.** Add tests proving one-directory
+  structured listing, lstat/read/exclusive staging write/mutations, a fresh provider
+  and freshly handshaken capabilities for every factory call, snapshot-derived
+  SSH/simulated composition, no browsing-
+  provider borrowing, and fail-closed untrusted/unavailable material. Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferEndpointProviderContractTests|RemoteTransferEndpointProviderFactoryTests'
+  ```
+
+  Expected RED: the old stream-only factory lacks endpoint input and dedicated
+  structured listing/settlement.
+
+- [x] **GREEN — provider boundary.** Introduce the exact protocols above and adapt
+  the deterministic provider/factories. Reuse the reviewed Task 2 operations; do
+  not duplicate the browsing state machine, add shell parsing, or implement Task 4
+  streaming workers. Require the focused provider command to pass.
+
+- [x] **RED — session ownership and close order.** Add tests proving every SSH
+  workspace owns exactly one coordinator/engine, two workspaces are isolated, local
+  runtime composition owns none, production and simulated composition are trusted
+  and fail closed, close rejects new work, workspace close awaits coordinator job/
+  provider settlement before browsing-provider settlement, and one runtime close
+  cannot cancel another. Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteWorkspaceTransferOwnershipTests|RuntimeSessionTransferOwnershipTests|RemoteWorkspaceProductionCompositionTests'
+  ```
+
+  Expected RED: missing ownership/composition and settlement ordering.
+
+- [x] **GREEN — ownership composition.** Create exactly one coordinator/engine in
+  SSH workspace composition, inject deterministic workers, create none for local
+  runtimes, and implement the required close ordering. `TerminalWorkspaceStore`,
+  `RootView`, and SwiftUI views retain no engine. Require the ownership command and
+  existing workspace/runtime close regressions to pass.
+
+## Task 3C — Engine/coordinator migration, retry/conflict behavior, and closeout
+
+**Status:** complete.
+
+**Acceptance:** `APP-007`, `APP-008`, `FILE-XFER-001`, `FILE-XFER-003`,
+`SESS-011`.
+
+- [x] **RED — scheduling and publication.** Add tests for FIFO start, maximum two
+  active jobs, monotonic attempt-local counters, transfer/verify phases, immediate
+  state/conflict/error edges, 10 Hz ordinary coalescing, one failure not corrupting
+  another, and two-engine isolation. Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferEngineTests|RemoteTransferCoordinatorTests'
+  ```
+
+- [x] **GREEN — migrate the engine.** Store complete admitted requests and bounded
+  checkpoints in the engine, publish presentation-only snapshots, use injected
+  UUID/clock/endpoint-provider/staging factories, and pump without detached work,
+  polling, per-chunk tasks, or production-only test hooks.
+
+- [x] **RED — cancellation, conflict, retry, and capability downgrade.** Add named
+  tests proving cancellation settles worker/provider/cleanup before `.cancelled`,
+  stale callbacks compare UUID and generation, conflict owns no worker/channel/
+  slot, resolution keeps job/current attempt/checkpoint and deterministic FIFO,
+  retry excludes committed descendants, and atomic-replace capability loss after
+  provider reacquisition re-enters conflict instead of silently using fallback.
+  Run:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferEngineTests/(cancellation|conflict|retry|stale|atomicReplaceDowngrade)'
+  ```
+
+- [x] **GREEN — settle state transitions.** Release and close all provider/channel
+  state before publishing conflict or cancellation settlement. Revalidate the
+  destination after reacquisition. Preserve the current attempt on collision
+  resolution; create a checked new attempt only on explicit retry. Require the
+  focused state-transition command to pass.
+
+- [x] Run the combined Task 3 GREEN and repeat it three times:
+
+  ```sh
+  swift test "${xmterm_testing_flags[@]}" --filter 'RemoteTransferModelsTests|RemoteTransferBoundsTests|RemoteTransferEndpointProviderContractTests|RemoteTransferEndpointProviderFactoryTests|RemoteWorkspaceTransferOwnershipTests|RuntimeSessionTransferOwnershipTests|RemoteWorkspaceProductionCompositionTests|RemoteTransferEngineTests|RemoteTransferCoordinatorTests'
+  ```
+
+- [x] Run `./scripts/verify.sh`, then `git diff --check`. Perform independent
+  architecture, concurrency, security, and code-quality review; repair every
+  Critical/High finding and rerun its focused tests plus the full verifier.
+- [x] Close Task 3 only after Tasks 3A, 3B, and 3C pass. Record exact test counts,
+  remaining lower-severity risks, and changed-file manifest without committing,
+  staging, merging, pushing, or tagging. Production worker wiring remains Task 4.
+
+Task 3 closeout evidence:
+
+- Task 3C focused tests passed 32/32.
+- Targeted Task 3C gate passed 8/8.
+- Runtime/workspace ownership gate passed 6/6.
+- Transfer concurrency stress passed x5.
+- The 10,000-retry stale-callback test passed with full UUID+generation identity.
+- Combined Task 3 suites passed 89 tests x3.
+- Independent architecture, concurrency, security, and code-quality reviews
+  approved the repair with no unresolved Critical/High finding.
+- File caps, build, and diff checks passed.
+- The repair includes safe cleanup retry validation: cleanup retry may act only on
+  exact current-attempt cleanup entries whose top-level keys belong to the request.
+- The repair includes actor slot/clock race fixes: conflict/cancellation release
+  active slots before publication; current-item progress is coalesced to 10 Hz;
+  state, phase, conflict, and error edges publish immediately with monotonic
+  timestamps.
+- Medium Task 5 debt: `RemoteTransferItemFailure` must become descendant-capable
+  before recursive/batch acceptance can close.
 
 ## Task 4 — Phase 4B.4 streaming upload/download and remote mutations
 
@@ -319,6 +679,9 @@ public struct RemoteTransferJobSnapshot: Identifiable, Equatable, Sendable {
   sparse/large fixture, short local read, unexpected remote EOF, write/status
   failure, disconnect, timeout, cancellation at each stage, and bounded in-flight
   data.
+- [ ] Wire production workers through `RemoteTransferEndpointProviderFactory` from
+  immutable endpoint snapshots. Do not change workspace ownership established in
+  Task 3B or consult UI/workspace lookup state to execute an admitted request.
 - [ ] Implement `LocalTransferStaging` with descriptor-relative Darwin APIs behind
   a protocol. Keep all local file I/O inside its actor.
 - [ ] Implement per-item upload staging as
@@ -334,6 +697,9 @@ public struct RemoteTransferJobSnapshot: Identifiable, Equatable, Sendable {
   collision, destination-to-backup failure, final rename failure, successful and
   failed rollback, backup cleanup failure, and cancellation before/during the
   bounded publication section.
+- [ ] When a worker/provider is reacquired after conflict or invalidation, recheck
+  atomic-replace capability. A downgrade re-enters conflict and requires a new
+  explicit non-atomic decision; it never silently selects the fallback.
 - [ ] Refresh affected loaded parent directories only after confirmed mutations;
   reconcile exact surviving selection.
 - [ ] Run focused GREEN, local `sftp-server` integration for every packet-backed
@@ -367,11 +733,21 @@ public struct RemoteTransferJobSnapshot: Identifiable, Equatable, Sendable {
 - [ ] Review traversal memory, symlink policy, delete safety, name generation,
   partial success, and batch error aggregation.
 
-## Task 6 — Phase 4B.6 remote Copy/Cut/Paste and shared action policy
+## Task 6 — Phase 4B.6 multi-selection UI, Copy/Cut/Paste, and action policy
 
-**Acceptance:** `APP-002`–`004`, `FILE-CLIP-001`, `FILE-COPY-001`, `MAC-001`,
-`SESS-011`.
+**Acceptance:** `APP-001`–`004`, `FILE-SEL-001`, `FILE-CLIP-001`,
+`FILE-COPY-001`, `MAC-001`, `SESS-011`.
 
+- [ ] Write RED presentation/interaction tests for exact multi-selection rendering,
+  click, Command-click, Shift-click, Command-Shift-click, arrows, Shift-arrows,
+  Command-A, Escape, context-click preservation, projection ordering, collapse/
+  refresh reconciliation, selection counts, focus restoration, and batch targets.
+- [ ] Replace the single-selection `List` binding with exact selection rendering
+  plus explicit pointer/keyboard routing to the completed Task 1 domain model.
+  Preserve projection order, focus, expansion, context-click, and terminal identity.
+- [ ] Run the focused selection UI tests and existing Task 1 model/workspace
+  regressions before beginning clipboard integration. Actual multi-selection UI is
+  a Task 6 acceptance gate and must pass before Task 7 drag work begins.
 - [ ] Write RED tests for private payload copy one/many, cut, schema/version/size
   validation, exact raw paths, timestamp, stale/deleted source, same-runtime paste,
   cross-runtime rejection, target selection/current directory, and terminal/text-
@@ -394,6 +770,10 @@ public struct RemoteTransferJobSnapshot: Identifiable, Equatable, Sendable {
 
 **Acceptance:** `APP-005`, `FILE-DND-001`, `FILE-DND-002`, `A11Y-003`,
 `MAC-001`, `MAC-006`.
+
+**Entry gate:** Task 6 actual multi-selection UI, selection-preserving context
+behavior, and batch action policy are GREEN. Drag acceptance cannot substitute for
+or precede that UI integration.
 
 - [ ] Write pure-policy RED tests for drag selection preservation, same-runtime
   default move and Option copy, cross-runtime forced copy, directory/current-
@@ -437,9 +817,6 @@ hidden toggle, or SSH/SCP-reference behavior.
   validation, delete parent/count/permanence copy, nonempty recursive warning,
   collision choices/apply-all, compact queue states, per-item failures, progress,
   cancel/retry, and accessibility text.
-- [ ] Replace the single-selection `List` binding with exact selection rendering
-  plus explicit click/keyboard gesture routing to the domain model. Preserve
-  projection order, focus, expansion, context-click, and terminal identity.
 - [ ] Add native rename/create/delete/collision sheets and a compact transfer
   popover/status control. Keep terminal detail dominant and avoid a permanent large
   transfer panel.
@@ -483,6 +860,11 @@ done in the handoff.
 - [ ] Revisit ADR 0004 with packaged Finder promise evidence and record whether its
   sandbox/distribution decision remains Proposed or can be narrowed; do not claim
   notarization/distribution completion without its separate gates.
+- [ ] Stop before any real Relay mutation and present the exact acceptance command/
+  action sequence, unique candidate directory, cleanup guard, and current local/
+  packaged evidence for fresh user approval. Read-only connection validation may
+  precede this gate; creation, mutation, transfer, rename, or deletion on Relay may
+  not. Approval of this plan is not approval to mutate the real host later.
 - [ ] On the Relay Host, create exactly one unique user-owned acceptance directory
   such as `~/XMterm-Phase4B-Acceptance-<UUID>`. Record the resolved exact path before
   mutation. Exercise small/large/directory upload/download, rename, move, create,
@@ -496,20 +878,24 @@ done in the handoff.
 - [ ] Update `ARCHITECTURE.md`, `INTERACTIONS.md`, `SECURITY.md`, `TESTING.md`,
   `PERFORMANCE.md`, `PLANS.md`, Phase 4B checklist/audit, and only then current
   product/README status. Preserve historical Phase 4A evidence.
-- [ ] Re-read the 38-item handoff definition of done line by line. Phase 4B may be
-  marked COMPLETE only when every item has direct evidence and no unresolved
-  Critical/High issue. Otherwise report PARTIAL with the exact blocker.
+- [ ] Re-read this plan's global constraints, every Task 3A–9 acceptance item, and
+  every row in the linked Phase 4B checklist line by line. Phase 4B may be marked
+  COMPLETE only when each applicable item has direct evidence and no unresolved
+  Critical/High issue. Otherwise report PARTIAL with the exact blocker. Do not cite
+  an unlocated or external item count as the completion source.
 
 ## Plan self-review
 
-- Spec coverage: all 20 design decisions and all nine requested Phase 4B slices map
-  to a task and acceptance IDs.
-- Type consistency: selection feeds the shared projection; transfer providers feed
-  the engine; coordinator snapshots feed app policy/UI; runtime close awaits the
-  coordinator through the workspace owner.
+- Spec coverage: all 20 design decisions and the repaired Task 3A–9 sequence map to
+  tasks and acceptance IDs; Tasks 1/2 remain completed history.
+- Type consistency: selection feeds the shared projection; complete requests and
+  endpoint providers feed the engine; presentation-only snapshots feed app policy/
+  UI; runtime close awaits the one workspace-owned coordinator before browsing.
 - Scope: Phase 5/6 are explicitly excluded; no dependency or remote runtime is
   introduced.
-- No placeholder implementation step remains. Exact limits, states, commands,
-  staging, collision, retry, symlink, metadata, and cross-session policies are
-  fixed.
+- No placeholder implementation step remains. Exact request/attempt/work/checkpoint
+  types, limits, states, focused commands, staging, conflict, retry, capability-
+  downgrade, symlink, metadata, and cross-session policies are fixed.
 - The no-commit user boundary overrides generic workflow commit steps.
+- Task 3A, 3B, and 3C are complete; production workers are Task 4, actual
+  multi-selection UI is Task 6, and drag acceptance begins only in Task 7.

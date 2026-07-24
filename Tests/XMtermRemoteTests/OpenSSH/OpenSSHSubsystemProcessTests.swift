@@ -122,6 +122,9 @@ struct OpenSSHSubsystemProcessTests {
         let folder = try root.appending(RemotePathComponent(rawBytes: Array("folder".utf8)))
         let file = try folder.appending(RemotePathComponent(rawBytes: Array("payload.bin".utf8)))
         let renamed = try folder.appending(RemotePathComponent(rawBytes: Array("renamed.bin".utf8)))
+        let replacement = try folder.appending(
+            RemotePathComponent(rawBytes: Array("replacement.bin".utf8))
+        )
 
         try await provider.createDirectory(folder)
         let writer = try await provider.openFileForWriting(file)
@@ -141,8 +144,23 @@ struct OpenSSHSubsystemProcessTests {
         #expect(try await reader.read(maximumBytes: 65_536) == nil)
         try await reader.close()
 
-        #expect((await provider.capabilities).supportsAtomicReplace)
-        try await provider.rename(file, to: renamed, replace: false)
+        guard (await provider.capabilities).supportsAtomicReplace else {
+            await provider.close()
+            return
+        }
+        let replacementWriter = try await provider.openFileForWriting(replacement)
+        try await replacementWriter.write(Data("old".utf8))
+        try await replacementWriter.close()
+        try await provider.rename(file, to: replacement, replace: true)
+        let replacementReader = try await provider.openFileForReading(replacement)
+        #expect(try await replacementReader.read(maximumBytes: 65_536)?.count == 65_536)
+        #expect(try await replacementReader.read(maximumBytes: 65_536) == Data([0x42, 0x43]))
+        #expect(try await replacementReader.read(maximumBytes: 65_536) == nil)
+        try await replacementReader.close()
+        await #expect(throws: RemoteFileError(category: .pathNotFound)) {
+            _ = try await provider.lstat(file)
+        }
+        try await provider.rename(replacement, to: renamed, replace: false)
         try await provider.removeFile(renamed)
         try await provider.removeDirectory(folder)
         #expect(try await provider.listDirectory(root).entries.isEmpty)

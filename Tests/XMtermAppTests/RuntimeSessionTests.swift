@@ -20,7 +20,12 @@ struct RuntimeSessionTests {
         )
         #expect(localRuntime.remoteWorkspace == nil)
 
-        let workspace = RemoteWorkspace(provider: RuntimeSessionTestRemoteFileProvider())
+        let ssh = SessionLaunchSpecification.legacy(kind: .relaySSH, title: "SSH")
+        let sshTerminal = makeTerminal(specification: ssh)
+        let workspace = RemoteWorkspace(
+            runtimeID: sshTerminal.sessionID,
+            provider: RuntimeSessionTestRemoteFileProvider()
+        )
         #expect(throws: RuntimeSessionCompositionError.workspaceEligibilityMismatch) {
             try RuntimeSession(
                 id: localTerminal.sessionID,
@@ -30,8 +35,6 @@ struct RuntimeSessionTests {
             )
         }
 
-        let ssh = SessionLaunchSpecification.legacy(kind: .relaySSH, title: "SSH")
-        let sshTerminal = makeTerminal(specification: ssh)
         let sshRuntime = try RuntimeSession(
             id: sshTerminal.sessionID,
             launchSpecification: ssh,
@@ -218,7 +221,10 @@ struct RuntimeSessionTests {
             id: terminal.sessionID,
             launchSpecification: specification,
             terminal: terminal,
-            remoteWorkspace: RemoteWorkspace(provider: provider)
+            remoteWorkspace: RemoteWorkspace(
+                runtimeID: terminal.sessionID,
+                provider: provider
+            )
         )
     }
 

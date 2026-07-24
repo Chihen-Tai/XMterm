@@ -207,6 +207,59 @@ struct OpenSSHSFTPRemoteFileProviderTests {
         #expect(writes[5] == expectedExclusiveOpen)
     }
 
+    @Test("[FILE-XFER-004] replace uses advertised OpenSSH posix-rename instead of base rename")
+    func replaceUsesAdvertisedPosixRename() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(
+                2,
+                sftpU32(3),
+                sftpString(Array("posix-rename@openssh.com".utf8)),
+                sftpString(Array("1".utf8))
+            ),
+            providerOK(1)
+        ])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(
+                factory: ScriptedSFTPChannelFactory(channels: [channel])
+            )
+        )
+        let source = try RemotePath(rawBytes: Array("/source".utf8))
+        let destination = try RemotePath(rawBytes: Array("/destination".utf8))
+
+        try await provider.rename(source, to: destination, replace: true)
+
+        let writes = await channel.recordedWrites()
+        let expectedReplace = try SFTPBinaryCodec().encodePosixRenameRequest(
+            id: 1,
+            source: source.rawBytes,
+            destination: destination.rawBytes
+        )
+        #expect(writes.map { $0[4] } == [1, 200])
+        #expect(writes[1] == expectedReplace)
+        #expect(await channel.invalidationCount() == 0)
+    }
+
+    @Test("[FILE-XFER-004] unsupported replace fails exactly without sending base rename")
+    func unsupportedReplaceFailsWithoutBaseRename() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(2, sftpU32(3))
+        ])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(
+                factory: ScriptedSFTPChannelFactory(channels: [channel])
+            )
+        )
+        let source = try RemotePath(rawBytes: Array("/source".utf8))
+        let destination = try RemotePath(rawBytes: Array("/destination".utf8))
+
+        await #expect(throws: RemoteFileError(category: .unsupportedProtocol)) {
+            try await provider.rename(source, to: destination, replace: true)
+        }
+
+        #expect(await channel.recordedWrites().map { $0[4] } == [1])
+        #expect(await channel.invalidationCount() == 0)
+    }
+
     @Test("[SESS-004, SESS-006] provider close invalidates outstanding file-handle identity without reconnecting")
     func closeInvalidatesOutstandingFileHandle() async throws {
         let channel = ScriptedSFTPChannel(responses: [
@@ -277,6 +330,33 @@ struct OpenSSHSFTPRemoteFileProviderTests {
         try await reader.close()
 
         #expect(await channel.recordedWrites().map { $0[4] } == [1, 3, 5, 4])
+        #expect(await channel.invalidationCount() == 0)
+    }
+
+    @Test("[SESS-004, FILE-XFER-002] a writable stream status failure settles its still-valid remote handle exactly once")
+    func writableStreamStatusFailureSettlesRemoteHandle() async throws {
+        let channel = ScriptedSFTPChannel(responses: [
+            sftpPacket(2, sftpU32(3)),
+            sftpPacket(102, sftpU32(1), sftpString([0x20])),
+            sftpPacket(101, sftpU32(2), sftpU32(3), sftpString([]), sftpString([])),
+            providerOK(3)
+        ])
+        let provider = OpenSSHSFTPRemoteFileProvider(
+            client: OpenSSHSFTPClient(
+                factory: ScriptedSFTPChannelFactory(channels: [channel])
+            )
+        )
+        let writer = try await provider.openFileForWriting(
+            try RemotePath(rawBytes: Array("/file".utf8))
+        )
+
+        await #expect(throws: RemoteFileError(category: .permissionDenied)) {
+            try await writer.write(Data([0x01]))
+        }
+        try await writer.close()
+        try await writer.close()
+
+        #expect(await channel.recordedWrites().map { $0[4] } == [1, 3, 6, 4])
         #expect(await channel.invalidationCount() == 0)
     }
 }
